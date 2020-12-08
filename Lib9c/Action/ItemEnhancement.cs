@@ -20,6 +20,8 @@ namespace Nekoyume.Action
     [ActionType("item_enhancement")]
     public class ItemEnhancement : GameAction
     {
+        public const int RequiredBlockCount = 1;
+
         public static readonly Address BlacksmithAddress = Addresses.Blacksmith;
 
         public Guid itemId;
@@ -50,13 +52,17 @@ namespace Nekoyume.Action
             }
 
             public override IValue Serialize() =>
+#pragma warning disable LAA1002
                 new Bencodex.Types.Dictionary(new Dictionary<IKey, IValue>
                 {
                     [(Text) "id"] = id.Serialize(),
-                    [(Text) "materialItemIdList"] =  materialItemIdList.Select(g => g.Serialize()).Serialize(),
+                    [(Text) "materialItemIdList"] = materialItemIdList
+                        .OrderBy(i => i)
+                        .Select(g => g.Serialize()).Serialize(),
                     [(Text) "gold"] = gold.Serialize(),
                     [(Text) "actionPoint"] = actionPoint.Serialize(),
-                }.Union((Bencodex.Types.Dictionary)base.Serialize()));
+                }.Union((Bencodex.Types.Dictionary) base.Serialize()));
+#pragma warning restore LAA1002
         }
 
         public override IAccountStateDelta Execute(IActionContext context)
@@ -73,10 +79,12 @@ namespace Nekoyume.Action
             if (ctx.Rehearsal)
             {
                 return states
-                    .MarkBalanceChanged(GoldCurrencyMock, BlacksmithAddress)
+                    .MarkBalanceChanged(GoldCurrencyMock, ctx.Signer, BlacksmithAddress)
                     .SetState(avatarAddress, MarkChanged)
                     .SetState(slotAddress, MarkChanged);
             }
+            Log.Warning($"{nameof(ItemEnhancement)} is deprecated. Please use ${nameof(ItemEnhancement2)}");
+
             var sw = new Stopwatch();
             sw.Start();
             var started = DateTimeOffset.UtcNow;
@@ -85,7 +93,7 @@ namespace Nekoyume.Action
             if (!states.TryGetAgentAvatarStates(ctx.Signer, avatarAddress, out AgentState agentState,
                 out AvatarState avatarState))
             {
-                return LogError(context, "Aborted as the avatar state of the signer was failed to load.");
+                throw new FailedLoadStateException("Aborted as the avatar state of the signer was failed to load.");
             }
             sw.Stop();
             Log.Debug("ItemEnhancement Get AgentAvatarStates: {Elapsed}", sw.Elapsed);
@@ -93,38 +101,35 @@ namespace Nekoyume.Action
 
             if (!avatarState.inventory.TryGetNonFungibleItem(itemId, out ItemUsable enhancementItem))
             {
-                // 강화 장비가 없는 에러.
-                return LogError(
-                    context,
-                    "Aborted as the NonFungibleItem ({ItemId}) was failed to load from avatar's inventory.",
-                    itemId
+                throw new ItemDoesNotExistException(
+                    $"Aborted as the NonFungibleItem ({itemId}) was failed to load from avatar's inventory."
                 );
             }
 
             if (enhancementItem.RequiredBlockIndex > context.BlockIndex)
             {
-                return LogError(
-                    context,
-                    "Aborted as the equipment to enhance ({ItemId}) is not available yet; it will be available at the block #{RequiredBlockIndex}.",
-                    itemId,
-                    enhancementItem.RequiredBlockIndex
+                throw new RequiredBlockIndexException(
+                    $"Aborted as the equipment to enhance ({itemId}) is not available yet; it will be available at the block #{enhancementItem.RequiredBlockIndex}."
                 );
             }
 
             if (!(enhancementItem is Equipment enhancementEquipment))
             {
-                // 캐스팅 버그. 예외상황.
-                return LogError(
-                    context,
-                    $"Aborted as the item is not a {nameof(Equipment)}, but {{ItemType}}.",
-                    enhancementItem.GetType().Name
+                throw new InvalidCastException(
+                    $"Aborted as the item is not a {nameof(Equipment)}, but {enhancementItem.GetType().Name}."
+
                 );
             }
 
             var slotState = states.GetCombinationSlotState(avatarAddress, slotIndex);
-            if (slotState is null || !(slotState.Validate(avatarState, ctx.BlockIndex)))
+            if (slotState is null)
             {
-                return LogError(context, "Aborted as the slot state was failed to load or invalid.");
+                throw new FailedLoadStateException($"Aborted as the slot state was failed to load. #{slotIndex}");
+            }
+
+            if (!slotState.Validate(avatarState, ctx.BlockIndex))
+            {
+                throw new CombinationSlotUnlockException($"Aborted as the slot state was failed to invalid. #{slotIndex}");
             }
 
             sw.Stop();
@@ -133,11 +138,9 @@ namespace Nekoyume.Action
 
             if(enhancementEquipment.level > 9)
             {
-                // 최대 강화도 초과 에러.
-                return LogError(
-                    context,
-                    "Aborted due to invaild equipment level: {EquipmentLevel} < 9",
-                    enhancementEquipment.level
+                // Maximum level exceeded.
+                throw new EquipmentLevelExceededException(
+                    $"Aborted due to invalid equipment level: {enhancementEquipment.level} < 9"
                 );
             }
 
@@ -150,12 +153,8 @@ namespace Nekoyume.Action
             var requiredAP = GetRequiredAp();
             if (avatarState.actionPoint < requiredAP)
             {
-                // AP 부족 에러.
-                return LogError(
-                    context,
-                    "Aborted due to insufficient action point: {ActionPointBalance} < {ActionCost}",
-                    avatarState.actionPoint,
-                    requiredAP
+                throw new NotEnoughActionPointException(
+                    $"Aborted due to insufficient action point: {avatarState.actionPoint} < {requiredAP}"
                 );
             }
 
@@ -175,87 +174,64 @@ namespace Nekoyume.Action
             }
 
             var materials = new List<Equipment>();
-            foreach (var materialId in materialIds)
+            foreach (var materialId in materialIds.OrderBy(guid => guid))
             {
                 if (!avatarState.inventory.TryGetNonFungibleItem(materialId, out ItemUsable materialItem))
                 {
-                    // 인벤토리에 재료로 등록한 장비가 없는 에러.
-                    return LogError(
-                        context,
-                        "Aborted as the the signer does not have a necessary material ({MaterialId}).",
-                        materialId
+                    throw new NotEnoughMaterialException(
+                        $"Aborted as the signer does not have a necessary material ({materialId})."
                     );
                 }
 
                 if (materialItem.RequiredBlockIndex > context.BlockIndex)
                 {
-                    return LogError(
-                        context,
-                        "Aborted as the material ({MaterialId}) is not available yet; it will be available at the block #{RequiredBlockIndex}.",
-                        materialId,
-                        materialItem.RequiredBlockIndex
+                    throw new RequiredBlockIndexException(
+                        $"Aborted as the material ({materialId}) is not available yet; it will be available at the block #{materialItem.RequiredBlockIndex}."
                     );
                 }
 
                 if (!(materialItem is Equipment materialEquipment))
                 {
-                    return LogError(
-                        context,
-                        $"Aborted as the material item is not a {nameof(Equipment)}, but {{ItemType}}.",
-                        materialItem.GetType().Name
+                    throw new InvalidCastException(
+                        $"Aborted as the material item is not an {nameof(Equipment)}, but {materialItem.GetType().Name}."
                     );
                 }
 
                 if (materials.Contains(materialEquipment))
                 {
-                    // 같은 guid의 아이템이 중복해서 등록된 에러.
-                    return LogError(
-                        context,
-                        "Aborted as the same material was used more than once: {Material}",
-                        materialEquipment
+                    throw new DuplicateMaterialException(
+                        $"Aborted as the same material was used more than once: {materialEquipment}"
                     );
                 }
 
                 if (enhancementEquipment.ItemId == materialId)
                 {
-                    // 강화 장비와 재료로 등록한 장비가 같은 에러.
-                    return LogError(
-                        context,
-                        "Aborted as an equipment to enhance ({ItemId}) was used as a material too.",
-                        materialId
+                    throw new InvalidMaterialException(
+                        $"Aborted as an equipment to enhance ({materialId}) was used as a material too."
                     );
                 }
 
                 if (materialEquipment.ItemSubType != enhancementEquipment.ItemSubType)
                 {
-                    // 서브 타입이 다른 에러.
-                    return LogError(
-                        context,
-                        "Aborted as the material item is not a {ExpectedItemSubType}, but {MaterialSubType}.",
-                        enhancementEquipment.ItemSubType,
-                        materialEquipment.ItemSubType
+                    // Invalid ItemSubType
+                    throw new InvalidMaterialException(
+                        $"Aborted as the material item is not a {enhancementEquipment.ItemSubType}, but {materialEquipment.ItemSubType}."
                     );
                 }
 
                 if (materialEquipment.Grade != enhancementEquipment.Grade)
                 {
-                    // 등급이 다른 에러.
-                    return LogError(
-                        context,
-                        "Aborted as grades of the equipment to enhance ({EquipmentGrade}) and a material ({MaterialGrade}) do not match.",
-                        enhancementEquipment.Grade,
-                        materialEquipment.Grade
+                    // Invalid Grade
+                    throw new InvalidMaterialException(
+                        $"Aborted as grades of the equipment to enhance ({enhancementEquipment.Grade}) and a material ({materialEquipment.Grade}) does not match."
                     );
                 }
 
                 if (materialEquipment.level != enhancementEquipment.level)
                 {
-                    // 강화도가 다른 에러.
-                    return LogError(
-                        context,
-                        "Aborted as levels of the equipment to enhance ({EquipmentLevel}) and a material ({MaterialLevel}) do not match.",
-                        enhancementEquipment.level,
-                        materialEquipment.level
+                    // Invalid level
+                    throw new InvalidMaterialException(
+                        $"Aborted as levels of the equipment to enhance ({enhancementEquipment.level}) and a material ({materialEquipment.level}) does not match."
                     );
                 }
                 sw.Stop();
@@ -268,6 +244,9 @@ namespace Nekoyume.Action
             enhancementEquipment.Unequip();
 
             enhancementEquipment = UpgradeEquipment(enhancementEquipment);
+
+            var requiredBlockIndex = ctx.BlockIndex + RequiredBlockCount;
+            enhancementEquipment.Update(requiredBlockIndex);
             sw.Stop();
             Log.Debug("ItemEnhancement Upgrade Equipment: {Elapsed}", sw.Elapsed);
             sw.Restart();
@@ -281,7 +260,7 @@ namespace Nekoyume.Action
             sw.Stop();
             Log.Debug("ItemEnhancement Remove Materials: {Elapsed}", sw.Elapsed);
             sw.Restart();
-            var mail = new ItemEnhanceMail(result, ctx.BlockIndex, ctx.Random.GenerateRandomGuid(), ctx.BlockIndex);
+            var mail = new ItemEnhanceMail(result, ctx.BlockIndex, ctx.Random.GenerateRandomGuid(), requiredBlockIndex);
             result.id = mail.id;
 
             avatarState.inventory.RemoveNonFungibleItem(enhancementEquipment);
@@ -291,7 +270,7 @@ namespace Nekoyume.Action
             var materialSheet = states.GetSheet<MaterialItemSheet>();
             avatarState.UpdateQuestRewards(materialSheet);
 
-            slotState.Update(result, ctx.BlockIndex, ctx.BlockIndex);
+            slotState.Update(result, ctx.BlockIndex, requiredBlockIndex);
 
             sw.Stop();
             Log.Debug("ItemEnhancement Update AvatarState: {Elapsed}", sw.Elapsed);
@@ -311,7 +290,10 @@ namespace Nekoyume.Action
                 var dict = new Dictionary<string, IValue>
                 {
                     ["itemId"] = itemId.Serialize(),
-                    ["materialIds"] = materialIds.Select(g => g.Serialize()).Serialize(),
+                    ["materialIds"] = materialIds
+                        .OrderBy(i => i)
+                        .Select(g => g.Serialize())
+                        .Serialize(),
                     ["avatarAddress"] = avatarAddress.Serialize(),
                 };
 
@@ -336,16 +318,16 @@ namespace Nekoyume.Action
             }
         }
 
-        private BigInteger GetRequiredNCG(EnhancementCostSheet costSheet, int grade, int level)
+        public static BigInteger GetRequiredNCG(EnhancementCostSheet costSheet, int grade, int level)
         {
             var row = costSheet
-                .Values
+                .OrderedList
                 .FirstOrDefault(x => x.Grade == grade && x.Level == level);
 
-            return row is null ? 0 : row.Cost;
+            return row?.Cost ?? 0;
         }
 
-        private static Equipment UpgradeEquipment(Equipment equipment)
+        public static Equipment UpgradeEquipment(Equipment equipment)
         {
             equipment.LevelUp();
             return equipment;

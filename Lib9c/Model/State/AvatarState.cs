@@ -5,11 +5,9 @@ using System.Globalization;
 using System.Linq;
 using Bencodex.Types;
 using Libplanet;
-using Libplanet.Action;
 using Libplanet.Crypto;
 using Nekoyume.Action;
 using Nekoyume.Battle;
-using Nekoyume.Model.BattleStatus;
 using Nekoyume.Model.Item;
 using Nekoyume.Model.Mail;
 using Nekoyume.Model.Quest;
@@ -29,7 +27,8 @@ namespace Nekoyume.Model.State
         public long exp;
         public Inventory inventory;
         public WorldInformation worldInformation;
-        public DateTimeOffset updatedAt;
+        // FIXME: it seems duplicated with blockIndex.
+        public long updatedAt;
         public Address agentAddress;
         public QuestList questList;
         public MailBox mailBox;
@@ -50,6 +49,8 @@ namespace Nekoyume.Model.State
         public string NameWithHash { get; private set; }
         public int Nonce { get; private set; }
 
+        public readonly Address RankingMapAddress;
+
         public static Address CreateAvatarAddress()
         {
             var key = new PrivateKey();
@@ -61,6 +62,7 @@ namespace Nekoyume.Model.State
             long blockIndex,
             AvatarSheets avatarSheets,
             GameConfigState gameConfigState,
+            Address rankingMapAddress,
             string name = null) : base(address)
         {
             if (address == null)
@@ -72,7 +74,7 @@ namespace Nekoyume.Model.State
             exp = 0;
             inventory = new Inventory();
             worldInformation = new WorldInformation(blockIndex, avatarSheets.WorldSheet, GameConfig.IsEditor);
-            updatedAt = DateTimeOffset.UtcNow;
+            updatedAt = blockIndex;
             this.agentAddress = agentAddress;
             questList = new QuestList(
                 avatarSheets.QuestSheet,
@@ -106,6 +108,12 @@ namespace Nekoyume.Model.State
                 );
                 combinationSlotAddresses.Add(slotAddress);
             }
+
+            combinationSlotAddresses = combinationSlotAddresses
+                .OrderBy(element => element)
+                .ToList();
+
+            RankingMapAddress = rankingMapAddress;
             UpdateGeneralQuest(new[] { createEvent, levelEvent });
             UpdateCompletedQuest();
 
@@ -139,6 +147,7 @@ namespace Nekoyume.Model.State
             ear = avatarState.ear;
             tail = avatarState.tail;
             combinationSlotAddresses = avatarState.combinationSlotAddresses;
+            RankingMapAddress = avatarState.RankingMapAddress;
 
             PostConstructor();
         }
@@ -152,7 +161,7 @@ namespace Nekoyume.Model.State
             exp = (long)((Integer)serialized["exp"]).Value;
             inventory = new Inventory((List)serialized["inventory"]);
             worldInformation = new WorldInformation((Dictionary)serialized["worldInformation"]);
-            updatedAt = serialized["updatedAt"].ToDateTimeOffset();
+            updatedAt = serialized["updatedAt"].ToLong();
             agentAddress = new Address(((Binary)serialized["agentAddress"]).Value);
             questList = new QuestList((Dictionary) serialized["questList"]);
             mailBox = new MailBox((List)serialized["mailBox"]);
@@ -169,6 +178,7 @@ namespace Nekoyume.Model.State
             ear = (int)((Integer)serialized["ear"]).Value;
             tail = (int)((Integer)serialized["tail"]).Value;
             combinationSlotAddresses = serialized["combinationSlotAddresses"].ToList(StateExtensions.ToAddress);
+            RankingMapAddress = serialized["ranking_map_address"].ToAddress();
             if (serialized.TryGetValue((Text) "nonce", out var nonceValue))
             {
                 Nonce = nonceValue.ToInteger();
@@ -189,12 +199,16 @@ namespace Nekoyume.Model.State
             exp = player.Exp.Current;
             inventory = player.Inventory;
             worldInformation = player.worldInformation;
+#pragma warning disable LAA1002
             foreach (var pair in player.monsterMap)
+#pragma warning restore LAA1002
             {
                 monsterMap.Add(pair);
             }
 
+#pragma warning disable LAA1002
             foreach (var pair in player.eventMap)
+#pragma warning restore LAA1002
             {
                 eventMap.Add(pair);
             }
@@ -204,7 +218,9 @@ namespace Nekoyume.Model.State
                 stageMap.Add(new KeyValuePair<int, int>(stageSimulator.StageId, 1));
             }
 
+#pragma warning disable LAA1002
             foreach (var pair in stageSimulator.ItemMap)
+#pragma warning restore LAA1002
             {
                 itemMap.Add(pair);
             }
@@ -220,6 +236,12 @@ namespace Nekoyume.Model.State
         public void Update(Mail.Mail mail)
         {
             mailBox.Add(mail);
+        }
+
+        public void UpdateV2(Mail.Mail mail)
+        {
+            mailBox.Add(mail);
+            mailBox.CleanUp();
         }
 
         public void Customize(int hair, int lens, int ear, int tail)
@@ -304,9 +326,9 @@ namespace Nekoyume.Model.State
         public void UpdateFromQuestReward(Quest.Quest quest, MaterialItemSheet materialItemSheet)
         {
             var items = new List<Material>();
-            foreach (var pair in quest.Reward.ItemMap)
+            foreach (var pair in quest.Reward.ItemMap.OrderBy(kv => kv.Key))
             {
-                var row = materialItemSheet.Values.First(itemRow => itemRow.Id == pair.Key);
+                var row = materialItemSheet.OrderedList.First(itemRow => itemRow.Id == pair.Key);
                 var item = ItemFactory.CreateMaterial(row);
                 var map = inventory.AddItem(item, pair.Value);
                 itemMap.Add(map);
@@ -345,10 +367,9 @@ namespace Nekoyume.Model.State
             return armor?.Id ?? GameConfig.DefaultAvatarArmorId;
         }
 
-        public bool ValidateEquipments(List<Guid> equipmentIds, long blockIndex)
+        public void ValidateEquipments(List<Guid> equipmentIds, long blockIndex)
         {
             var ringCount = 0;
-            var failed = false;
             foreach (var itemId in equipmentIds)
             {
                 if (!inventory.TryGetNonFungibleItem(itemId, out ItemUsable outNonFungibleItem))
@@ -359,43 +380,141 @@ namespace Nekoyume.Model.State
                 var equipment = (Equipment) outNonFungibleItem;
                 if (equipment.RequiredBlockIndex > blockIndex)
                 {
-                    failed = true;
-                    break;
+                    throw new RequiredBlockIndexException($"{equipment.ItemSubType} / unlock on {equipment.RequiredBlockIndex}");
                 }
 
+                var requiredLevel = 0;
                 switch (equipment.ItemSubType)
                 {
                     case ItemSubType.Weapon:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotWeapon;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotWeapon;
                         break;
                     case ItemSubType.Armor:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotArmor;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotArmor;
                         break;
                     case ItemSubType.Belt:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotBelt;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotBelt;
                         break;
                     case ItemSubType.Necklace:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotNecklace;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotNecklace;
                         break;
                     case ItemSubType.Ring:
                         ringCount++;
-                        var requireLevel = ringCount == 1
+                        requiredLevel = ringCount == 1
                             ? GameConfig.RequireCharacterLevel.CharacterEquipmentSlotRing1
                             : ringCount == 2
                                 ? GameConfig.RequireCharacterLevel.CharacterEquipmentSlotRing2
                                 : int.MaxValue;
-                        failed = level < requireLevel;
                         break;
                     default:
-                        failed = true;
-                        break;
+                        throw new ArgumentOutOfRangeException($"{equipment.ItemSubType} / invalid equipment type");
+                }
+
+                if (level < requiredLevel)
+                {
+                    throw new EquipmentSlotUnlockException($"{equipment.ItemSubType} / not enough level. required: {requiredLevel}");
                 }
             }
-
-            return !failed;
         }
 
-        public void EquipCostumes(List<int> costumeIds)
+        public void ValidateConsumable(List<Guid> consumableIds, long currentBlockIndex)
+        {
+            for (var slotIndex = 0; slotIndex < consumableIds.Count; slotIndex++)
+            {
+                var consumableId = consumableIds[slotIndex];
+
+                if (!inventory.TryGetNonFungibleItem(consumableId, out ItemUsable outNonFungibleItem))
+                {
+                    continue;
+                }
+
+                var equipment = (Consumable) outNonFungibleItem;
+                if (equipment.RequiredBlockIndex > currentBlockIndex)
+                {
+                    throw new RequiredBlockIndexException(
+                        $"{equipment.ItemSubType} / unlock on {equipment.RequiredBlockIndex}");
+                }
+
+                int requiredLevel;
+                switch (slotIndex)
+                {
+                    case 0:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterConsumableSlot1;
+                        break;
+                    case 1:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterConsumableSlot2;
+                        break;
+                    case 2:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterConsumableSlot3;
+                        break;
+                    case 3:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterConsumableSlot4;
+                        break;
+                    case 4:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterConsumableSlot5;
+                        break;
+                    default:
+                        throw new ConsumableSlotOutOfRangeException();
+                }
+
+                if (level < requiredLevel)
+                {
+                    throw new ConsumableSlotUnlockException($"not enough level. required: {requiredLevel}");
+                }
+            }
+        }
+
+        public void ValidateCostume(HashSet<int> costumeIds)
+        {
+            var subTypes = new List<ItemSubType>();
+            foreach (var costumeId in costumeIds.OrderBy(i => i))
+            {
+                if (!inventory.TryGetCostume(costumeId, out var item))
+                {
+                    continue;
+                }
+
+                var costume = (Costume) item.item;
+                if (subTypes.Contains(costume.ItemSubType))
+                {
+                    throw new DuplicateCostumeException($"can't equip duplicate costume type : {costume.ItemSubType}");
+                }
+                subTypes.Add(costume.ItemSubType);
+
+                int requiredLevel;
+                switch (costume.ItemSubType)
+                {
+                    case ItemSubType.FullCostume:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterFullCostumeSlot;
+                        break;
+                    case ItemSubType.HairCostume:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterHairCostumeSlot;
+                        break;
+                    case ItemSubType.EarCostume:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEarCostumeSlot;
+                        break;
+                    case ItemSubType.EyeCostume:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEyeCostumeSlot;
+                        break;
+                    case ItemSubType.TailCostume:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterTailCostumeSlot;
+                        break;
+                    case ItemSubType.Title:
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterTitleSlot;
+                        break;
+                    default:
+                        throw new InvalidItemTypeException(
+                            $"Costume[id: {costumeId}] isn't expected type. [type: {costume.ItemSubType}]");
+                }
+
+                if (level < requiredLevel)
+                {
+                    throw new CostumeSlotUnlockException($"not enough level. required: {requiredLevel}");
+                }
+            }
+        }
+
+        public void EquipCostumes(HashSet<int> costumeIds)
         {
             // 코스튬 해제.
             var inventoryCostumes = inventory.Items
@@ -403,13 +522,15 @@ namespace Nekoyume.Model.State
                 .OfType<Costume>()
                 .Where(i => i.equipped)
                 .ToImmutableHashSet();
+#pragma warning disable LAA1002
             foreach (var costume in inventoryCostumes)
+#pragma warning restore LAA1002
             {
                 costume.equipped = false;
             }
 
             // 코스튬 장착.
-            foreach (var costumeId in costumeIds)
+            foreach (var costumeId in costumeIds.OrderBy(i => i))
             {
                 if (!inventory.TryGetCostume(costumeId, out var outItem))
                 {
@@ -428,7 +549,9 @@ namespace Nekoyume.Model.State
                 .OfType<Equipment>()
                 .Where(i => i.equipped)
                 .ToImmutableHashSet();
+#pragma warning disable LAA1002
             foreach (var equipment in inventoryEquipments)
+#pragma warning restore LAA1002
             {
                 equipment.Unequip();
             }
@@ -454,6 +577,7 @@ namespace Nekoyume.Model.State
         }
 
         public override IValue Serialize() =>
+#pragma warning disable LAA1002
             new Dictionary(new Dictionary<IKey, IValue>
             {
                 [(Text)"name"] = (Text)name,
@@ -477,8 +601,13 @@ namespace Nekoyume.Model.State
                 [(Text)"lens"] = (Integer)lens,
                 [(Text)"ear"] = (Integer)ear,
                 [(Text)"tail"] = (Integer)tail,
-                [(Text)"combinationSlotAddresses"] = combinationSlotAddresses.Select(i => i.Serialize()).Serialize(),
+                [(Text)"combinationSlotAddresses"] = combinationSlotAddresses
+                    .OrderBy(i => i)
+                    .Select(i => i.Serialize())
+                    .Serialize(),
                 [(Text) "nonce"] = Nonce.Serialize(),
+                [(Text)"ranking_map_address"] = RankingMapAddress.Serialize(),
             }.Union((Dictionary)base.Serialize()));
+#pragma warning restore LAA1002
     }
 }

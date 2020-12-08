@@ -222,11 +222,15 @@ namespace Nekoyume.Model.State
         {
             return
                 new List(
-                    value.Select(
-                        pair =>
-                            (IValue)Dictionary.Empty
-                                .Add("material", pair.Key.Serialize())
-                                .Add("count", pair.Value.Serialize())));
+                    value
+                        .OrderBy(kv => kv.Key.Id)
+                        .Select(
+                            pair =>
+                                (IValue)Dictionary.Empty
+                                    .Add("material", pair.Key.Serialize())
+                                    .Add("count", pair.Value.Serialize())
+                        )
+                );
         }
 
         public static Dictionary<Material, int> ToDictionary_Material_int(this IValue serialized)
@@ -235,27 +239,6 @@ namespace Nekoyume.Model.State
                 .Cast<Dictionary>()
                 .ToDictionary(
                     value => (Material)ItemFactory.Deserialize((Dictionary)value["material"]),
-                    value => value["count"].ToInteger()
-                );
-        }
-
-        public static IValue Serialize(this Dictionary<HashDigest<SHA256>, int> value)
-        {
-            return new List(
-                value.Select(
-                    pair => (IValue) Dictionary.Empty
-                        .Add("item_id", pair.Key.Serialize())
-                        .Add("count", pair.Value.Serialize())
-                )
-            );
-        }
-
-        public static Dictionary<HashDigest<SHA256>, int> Deserialize(this IValue serialized)
-        {
-            return ((List)serialized)
-                .Cast<Dictionary>()
-                .ToDictionary(
-                    value => value["item_id"].ToItemId(),
                     value => value["count"].ToInteger()
                 );
         }

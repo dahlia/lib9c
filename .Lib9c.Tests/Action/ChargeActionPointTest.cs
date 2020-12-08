@@ -37,14 +37,18 @@ namespace Lib9c.Tests.Action
                 agentAddress,
                 0,
                 _tableSheets.GetAvatarSheets(),
-                gameConfigState
+                gameConfigState,
+                default
             )
             {
                 actionPoint = 0,
             };
             agent.avatarAddresses.Add(0, avatarAddress);
 
-            var apStone = ItemFactory.CreateItem(_tableSheets.MaterialItemSheet.Values.First(r => r.ItemSubType == ItemSubType.ApStone));
+            var apStone =
+                ItemFactory.CreateItem(
+                    _tableSheets.MaterialItemSheet.Values.First(r => r.ItemSubType == ItemSubType.ApStone),
+                    new ItemEnhancementTest.TestRandom());
             avatarState.inventory.AddItem(apStone);
 
             Assert.Equal(0, avatarState.actionPoint);

@@ -26,7 +26,7 @@ namespace Nekoyume.Model
         }
 
         public IValue Serialize() => new Bencodex.Types.Dictionary(
-            _dictionary.Select(kv =>
+            _dictionary.OrderBy(kv => kv.Key).Select(kv =>
                 new KeyValuePair<IKey, IValue>(
                     (Text) kv.Key.ToString(CultureInfo.InvariantCulture),
                     (Text) kv.Value.ToString(CultureInfo.InvariantCulture)
@@ -53,7 +53,9 @@ namespace Nekoyume.Model
 
         public bool Contains(KeyValuePair<int, int> item)
         {
+#pragma warning disable LAA1002
             return _dictionary.Contains(item);
+#pragma warning restore LAA1002
         }
 
         public void CopyTo(KeyValuePair<int, int>[] array, int arrayIndex)
@@ -71,7 +73,7 @@ namespace Nekoyume.Model
 
         public IEnumerator<KeyValuePair<int, int>> GetEnumerator()
         {
-            return _dictionary.GetEnumerator();
+            return _dictionary.OrderBy(kv => kv.Key).GetEnumerator();
         }
 
         IEnumerator IEnumerable.GetEnumerator()

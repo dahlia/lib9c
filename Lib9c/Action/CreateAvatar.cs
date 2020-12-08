@@ -20,9 +20,6 @@ namespace Nekoyume.Action
     [ActionType("create_avatar")]
     public class CreateAvatar : GameAction
     {
-        // 계정당 기본 소지 골드
-        public static readonly BigInteger InitialGoldBalance = 1500;
-
         public Address avatarAddress;
         public int index;
         public int hair;
@@ -74,16 +71,16 @@ namespace Nekoyume.Action
 
                 return states
                     .SetState(avatarAddress, MarkChanged)
+                    .SetState(Addresses.Ranking, MarkChanged)
                     .MarkBalanceChanged(GoldCurrencyMock, GoldCurrencyState.Address, context.Signer);
             }
 
+            Log.Warning($"{nameof(CreateAvatar)} is deprecated. Please use ${nameof(CreateAvatar2)}");
+
             if (!Regex.IsMatch(name, GameConfig.AvatarNickNamePattern))
             {
-                return LogError(
-                    context,
-                    "Aborted as the input name {@Name} does not follow the allowed name pattern.",
-                    name
-                );
+                throw new InvalidNamePatternException(
+                    $"Aborted as the input name {name} does not follow the allowed name pattern.");
             }
 
             var sw = new Stopwatch();
@@ -95,26 +92,24 @@ namespace Nekoyume.Action
             var avatarState = states.GetAvatarState(avatarAddress);
             if (!(avatarState is null))
             {
-                return LogError(context, "Aborted as there is already an avatar at {Address}.", avatarAddress);
+                throw new InvalidAddressException(
+                    $"Aborted as there is already an avatar at {avatarAddress}.");
+            }
+
+            if (!(0 <= index && index < GameConfig.SlotCount))
+            {
+                throw new AvatarIndexOutOfRangeException(
+                    $"Aborted as the index is out of range #{index}.");
             }
 
             if (agentState.avatarAddresses.ContainsKey(index))
             {
-                return LogError(context, "Aborted as the signer already has an avatar at index #{Index}.", index);
+                throw new AvatarIndexAlreadyUsedException(
+                    $"Aborted as the signer already has an avatar at index #{index}.");
             }
             sw.Stop();
             Log.Debug("CreateAvatar Get AgentAvatarStates: {Elapsed}", sw.Elapsed);
             sw.Restart();
-
-            if (existingAgentState is null)
-            {
-                // 첫 아바타 생성이면 계정당 기본 소지금 부여.
-                states = states.TransferAsset(
-                    GoldCurrencyState.Address,
-                    ctx.Signer,
-                    states.GetGoldCurrency() * InitialGoldBalance
-                );
-            }
 
             Log.Debug("Execute CreateAvatar; player: {AvatarAddress}", avatarAddress);
 
@@ -123,7 +118,11 @@ namespace Nekoyume.Action
             // Avoid NullReferenceException in test
             var materialItemSheet = ctx.PreviousStates.GetSheet<MaterialItemSheet>();
 
-            avatarState = CreateAvatarState(name, avatarAddress, ctx, materialItemSheet);
+            var rankingState = ctx.PreviousStates.GetRankingState();
+
+            var rankingMapAddress = rankingState.UpdateRankingMap(avatarAddress);
+
+            avatarState = CreateAvatarState(name, avatarAddress, ctx, materialItemSheet, rankingMapAddress);
 
             if (hair < 0) hair = 0;
             if (lens < 0) lens = 0;
@@ -147,15 +146,15 @@ namespace Nekoyume.Action
             Log.Debug("CreateAvatar Total Executed Time: {Elapsed}", ended - started);
             return states
                 .SetState(ctx.Signer, agentState.Serialize())
+                .SetState(Addresses.Ranking, rankingState.Serialize())
                 .SetState(avatarAddress, avatarState.Serialize());
         }
 
-        private static AvatarState CreateAvatarState(
-            string name,
+        public static AvatarState CreateAvatarState(string name,
             Address avatarAddress,
             IActionContext ctx,
-            MaterialItemSheet materialItemSheet
-        )
+            MaterialItemSheet materialItemSheet,
+            Address rankingMapAddress)
         {
             var state = ctx.PreviousStates;
             var gameConfigState = state.GetGameConfigState();
@@ -165,6 +164,7 @@ namespace Nekoyume.Action
                 ctx.BlockIndex,
                 state.GetAvatarSheets(),
                 gameConfigState,
+                rankingMapAddress,
                 name
             );
 
@@ -186,21 +186,21 @@ namespace Nekoyume.Action
             EquipmentItemSheet equipmentItemSheet
         )
         {
-            foreach (var row in costumeItemSheet)
+            foreach (var row in costumeItemSheet.OrderedList)
             {
-                avatarState.inventory.AddItem(ItemFactory.CreateCostume(row));
+                avatarState.inventory.AddItem(ItemFactory.CreateCostume(row, random.GenerateRandomGuid()));
             }
 
-            foreach (var row in materialItemSheet)
+            foreach (var row in materialItemSheet.OrderedList)
             {
                 avatarState.inventory.AddItem(ItemFactory.CreateMaterial(row), 10);
             }
 
-            foreach (var pair in equipmentItemSheet.Where(pair =>
-                pair.Value.Id > GameConfig.DefaultAvatarWeaponId))
+            foreach (var row in equipmentItemSheet.OrderedList.Where(row =>
+                row.Id > GameConfig.DefaultAvatarWeaponId))
             {
                 var itemId = random.GenerateRandomGuid();
-                avatarState.inventory.AddItem(ItemFactory.CreateItemUsable(pair.Value, itemId, default));
+                avatarState.inventory.AddItem(ItemFactory.CreateItemUsable(row, itemId, default));
             }
         }
     }

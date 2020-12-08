@@ -102,6 +102,27 @@ namespace Nekoyume.Battle
             }
         }
 
+        public StageSimulator(
+            IRandom random,
+            AvatarState avatarState,
+            List<Guid> foods,
+            int worldId,
+            int stageId,
+            StageSimulatorSheets stageSimulatorSheets,
+            CostumeStatSheet costumeStatSheet
+        )
+            : this(
+                random,
+                avatarState,
+                foods,
+                worldId,
+                stageId,
+                stageSimulatorSheets
+            )
+        {
+            Player.SetCostumeStat(costumeStatSheet);
+        }
+
         public override Player Simulate()
         {
 #if TEST_LOG
@@ -113,7 +134,7 @@ namespace Nekoyume.Battle
             Log.clearedWaveNumber = 0;
             Log.newlyCleared = false;
             Player.Spawn();
-            TurnNumber = 1;
+            TurnNumber = 0;
             for (var i = 0; i < _waves.Count; i++)
             {
                 Characters = new SimplePriorityQueue<CharacterBase, decimal>();

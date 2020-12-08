@@ -233,7 +233,7 @@ namespace Nekoyume.Model.Quest
 
         public IEnumerator<Quest> GetEnumerator()
         {
-            return _quests.GetEnumerator();
+            return _quests.OrderBy(q => q.Id).GetEnumerator();
         }
 
         IEnumerator IEnumerable.GetEnumerator()
@@ -341,7 +341,7 @@ namespace Nekoyume.Model.Quest
 
         public void UpdateItemTypeCollectQuest(IEnumerable<ItemBase> items)
         {
-            foreach (var item in items)
+            foreach (var item in items.OrderBy(i => i.Id))
             {
                 var targets = _quests
                     .OfType<ItemTypeCollectQuest>()
@@ -355,8 +355,12 @@ namespace Nekoyume.Model.Quest
 
         public IValue Serialize() => new Dictionary(new Dictionary<IKey, IValue>
         {
-            [(Text) "quests"] = new List(this.Select(q => q.Serialize())),
-            [(Text) "completedQuestIds"] = new List(completedQuestIds.Select(i => i.Serialize()))
+            [(Text) "quests"] = new List(_quests
+                .OrderBy(i => i.Id)
+                .Select(q => q.Serialize())),
+            [(Text) "completedQuestIds"] = new List(completedQuestIds
+                .OrderBy(i => i)
+                .Select(i => i.Serialize()))
         });
 
         public void UpdateCombinationEquipmentQuest(int recipeId)
@@ -386,7 +390,7 @@ namespace Nekoyume.Model.Quest
             var itemMap = new Dictionary<int, int>();
             if (rewardSheet.TryGetValue(rewardId, out var questRewardRow))
             {
-                foreach (var id in questRewardRow.RewardIds)
+                foreach (var id in questRewardRow.RewardIds.OrderBy(i => i))
                 {
                     if (itemRewardSheet.TryGetValue(id, out var itemRewardRow))
                     {

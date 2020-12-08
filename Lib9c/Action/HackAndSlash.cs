@@ -26,37 +26,34 @@ namespace Nekoyume.Action
         public int stageId;
         public Address avatarAddress;
         public Address WeeklyArenaAddress;
+        public Address RankingMapAddress;
         public BattleLog Result { get; private set; }
 
         protected override IImmutableDictionary<string, IValue> PlainValueInternal =>
             new Dictionary<string, IValue>
             {
-                ["costumes"] = new List(costumes.Select(e => e.Serialize())),
-                ["equipments"] = new List(equipments.Select(e => e.Serialize())),
-                ["foods"] = new List(foods.Select(e => e.Serialize())),
+                ["costumes"] = new List(costumes.OrderBy(i => i).Select(e => e.Serialize())),
+                ["equipments"] = new List(equipments.OrderBy(i => i).Select(e => e.Serialize())),
+                ["foods"] = new List(foods.OrderBy(i => i).Select(e => e.Serialize())),
                 ["worldId"] = worldId.Serialize(),
                 ["stageId"] = stageId.Serialize(),
                 ["avatarAddress"] = avatarAddress.Serialize(),
                 ["weeklyArenaAddress"] = WeeklyArenaAddress.Serialize(),
+                ["rankingMapAddress"] = RankingMapAddress.Serialize(),
             }.ToImmutableDictionary();
 
 
         protected override void LoadPlainValueInternal(
             IImmutableDictionary<string, IValue> plainValue)
         {
-            costumes = ((List) plainValue["costumes"]).Select(
-                e => e.ToInteger()
-            ).ToList();
-            equipments = ((List) plainValue["equipments"]).Select(
-                e => e.ToGuid()
-            ).ToList();
-            foods = ((List) plainValue["foods"]).Select(
-                e => e.ToGuid()
-            ).ToList();
+            costumes = ((List) plainValue["costumes"]).Select(e => e.ToInteger()).ToList();
+            equipments = ((List) plainValue["equipments"]).Select(e => e.ToGuid()).ToList();
+            foods = ((List) plainValue["foods"]).Select(e => e.ToGuid()).ToList();
             worldId = plainValue["worldId"].ToInteger();
             stageId = plainValue["stageId"].ToInteger();
             avatarAddress = plainValue["avatarAddress"].ToAddress();
             WeeklyArenaAddress = plainValue["weeklyArenaAddress"].ToAddress();
+            RankingMapAddress = plainValue["rankingMapAddress"].ToAddress();
         }
 
         public override IAccountStateDelta Execute(IActionContext context)
@@ -65,12 +62,13 @@ namespace Nekoyume.Action
             var states = ctx.PreviousStates;
             if (ctx.Rehearsal)
             {
-                states = states.SetState(RankingState.Address, MarkChanged);
+                states = states.SetState(RankingMapAddress, MarkChanged);
                 states = states.SetState(avatarAddress, MarkChanged);
                 states = states.SetState(WeeklyArenaAddress, MarkChanged);
                 return states.SetState(ctx.Signer, MarkChanged);
             }
 
+            Log.Warning($"{nameof(HackAndSlash)} is deprecated. Please use ${nameof(HackAndSlash2)}");
             var sw = new Stopwatch();
             sw.Start();
             var started = DateTimeOffset.UtcNow;
@@ -82,10 +80,7 @@ namespace Nekoyume.Action
                 out AgentState agentState,
                 out AvatarState avatarState))
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
-                    "Aborted as the avatar state of the signer was failed to load."
-                );
+                throw new FailedLoadStateException("Aborted as the avatar state of the signer was failed to load.");
             }
 
             sw.Stop();
@@ -93,101 +88,67 @@ namespace Nekoyume.Action
 
             sw.Restart();
 
+            if (avatarState.RankingMapAddress != RankingMapAddress)
+            {
+                throw new InvalidAddressException("Invalid ranking map address");
+            }
+
             // worldId와 stageId가 유효한지 확인합니다.
             var worldSheet = states.GetSheet<WorldSheet>();
 
             if (!worldSheet.TryGetValue(worldId, out var worldRow, false))
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
-                    $"Not fount {worldId} in TableSheets.WorldSheet."
-                );
+                throw new SheetRowNotFoundException(nameof(WorldSheet), worldId);
             }
 
             if (stageId < worldRow.StageBegin ||
                 stageId > worldRow.StageEnd)
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
+                throw new SheetRowColumnException(
                     $"{worldId} world is not contains {worldRow.Id} stage: " +
-                    $"{worldRow.StageBegin}-{worldRow.StageEnd}"
-                );
+                    $"{worldRow.StageBegin}-{worldRow.StageEnd}");
             }
 
             var stageSheet = states.GetSheet<StageSheet>();
             if (!stageSheet.TryGetValue(stageId, out var stageRow))
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
-                    $"Not fount stage id in TableSheets.StageSheet: {stageId}"
-                );
+                throw new SheetRowNotFoundException(nameof(StageSheet), stageId);
             }
 
             var worldInformation = avatarState.worldInformation;
             if (!worldInformation.TryGetWorld(worldId, out var world))
             {
-                // NOTE: 이 경우는 아바타 생성 시에는 WorldSheet에 없던 worldId가 새로 추가된 경우로 볼 수 있습니다.
-                if (!worldInformation.TryAddWorld(worldRow, out world))
-                {
-                    // FIXME we should create dedicated type for this exception.
-                    throw new InvalidOperationException(
-                        $"Failed to add {worldId} world to WorldInformation."
-                    );
-                }
+                // NOTE: Add new World from WorldSheet
+                worldInformation.AddAndUnlockNewWorld(worldRow, ctx.BlockIndex, worldSheet);
             }
 
             if (!world.IsUnlocked)
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
-                    $"Aborted as the world {worldId} is locked."
-                );
+                throw new InvalidWorldException($"{worldId} is locked.");
             }
 
             if (world.StageBegin != worldRow.StageBegin ||
                 world.StageEnd != worldRow.StageEnd)
             {
-                // NOTE: 이 경우는 아바타 생성 이후에 worldId가 포함하는 stageId의 범위가 바뀐 경우로 볼 수 있습니다.
-                if (!worldInformation.TryUpdateWorld(worldRow, out world))
-                {
-                    // FIXME we should create dedicated type for this exception.
-                    throw new InvalidOperationException(
-                        $"Failed to update {worldId} world in WorldInformation."
-                    );
-                }
-
-                if (world.StageBegin != worldRow.StageBegin ||
-                    world.StageEnd != worldRow.StageEnd)
-                {
-                    // FIXME we should create dedicated type for this exception.
-                    throw new InvalidOperationException(
-                        $"Failed to update {worldId} world in WorldInformation."
-                    );
-                }
+                worldInformation.UpdateWorld(worldRow);
             }
 
             if (world.IsStageCleared && stageId > world.StageClearedId + 1 ||
                 !world.IsStageCleared && stageId != world.StageBegin)
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
+                throw new InvalidStageException(
                     $"Aborted as the stage ({worldId}/{stageId}) is not cleared; " +
                     $"cleared stage: {world.StageClearedId}"
                 );
             }
 
-            // 장비가 유효한지 검사한다.
-            if (!avatarState.ValidateEquipments(equipments, context.BlockIndex))
-            {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException("Aborted as the equipment is invalid.");
-            }
+            avatarState.ValidateEquipments(equipments, context.BlockIndex);
+            avatarState.ValidateConsumable(foods, context.BlockIndex);
 
             sw.Restart();
             if (avatarState.actionPoint < stageRow.CostAP)
             {
-                // FIXME we should create dedicated type for this exception.
-                throw new InvalidOperationException(
+                throw new NotEnoughActionPointException(
                     $"Aborted due to insufficient action point: " +
                     $"{avatarState.actionPoint} < {stageRow.CostAP}"
                 );
@@ -195,7 +156,7 @@ namespace Nekoyume.Action
 
             avatarState.actionPoint -= stageRow.CostAP;
 
-            avatarState.EquipCostumes(costumes);
+            avatarState.EquipCostumes(new HashSet<int>(costumes));
 
             avatarState.EquipEquipments(equipments);
             sw.Stop();
@@ -253,16 +214,16 @@ namespace Nekoyume.Action
             var materialSheet = states.GetSheet<MaterialItemSheet>();
             avatarState.UpdateQuestRewards(materialSheet);
 
-            avatarState.updatedAt = DateTimeOffset.UtcNow;
+            avatarState.updatedAt = ctx.BlockIndex;
             states = states.SetState(avatarAddress, avatarState.Serialize());
 
             sw.Stop();
             Log.Debug("HAS Set AvatarState: {Elapsed}", sw.Elapsed);
 
             sw.Restart();
-            if (states.TryGetState(RankingState.Address, out Dictionary d) && simulator.Log.IsClear)
+            if (states.TryGetState(RankingMapAddress, out Dictionary d) && simulator.Log.IsClear)
             {
-                var ranking = new RankingState(d);
+                var ranking = new RankingMapState(d);
                 ranking.Update(avatarState);
 
                 sw.Stop();
@@ -274,14 +235,16 @@ namespace Nekoyume.Action
                 sw.Stop();
                 Log.Debug("HAS Serialize RankingState: {Elapsed}", sw.Elapsed);
                 sw.Restart();
-                states = states.SetState(RankingState.Address, serialized);
+                states = states.SetState(RankingMapAddress, serialized);
             }
 
             sw.Stop();
             Log.Debug("HAS Set RankingState: {Elapsed}", sw.Elapsed);
 
             sw.Restart();
-            if (states.TryGetState(WeeklyArenaAddress, out Dictionary weeklyDict))
+            if (simulator.Log.stageId >= GameConfig.RequireClearedStageLevel.ActionsInRankingBoard &&
+                simulator.Log.IsClear &&
+                states.TryGetState(WeeklyArenaAddress, out Dictionary weeklyDict))
             {
                 var weekly = new WeeklyArenaState(weeklyDict);
                 if (!weekly.Ended)

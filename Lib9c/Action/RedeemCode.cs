@@ -44,8 +44,7 @@ namespace Nekoyume.Action
                 return states;
             }
 
-            if (!states.TryGetAgentAvatarStates(context.Signer, AvatarAddress, out AgentState agentState,
-                out AvatarState avatarState))
+            if (!states.TryGetAvatarState(context.Signer, AvatarAddress, out AvatarState avatarState))
             {
                 return states;
             }
@@ -84,13 +83,12 @@ namespace Nekoyume.Action
                         {
                             if (info.ItemId is int itemId)
                             {
-                                ItemBase item = ItemFactory.CreateItem(itemSheets[itemId]);
+                                ItemBase item = ItemFactory.CreateItem(itemSheets[itemId], context.Random);
                                 // We should fix count as 1 because ItemFactory.CreateItem
                                 // will create a new item every time.
                                 avatarState.inventory.AddItem(item, 1);
                             }
                         }
-                        states = states.SetState(AvatarAddress, avatarState.Serialize());
                         break;
                     case RewardType.Gold:
                         states = states.TransferAsset(
@@ -104,8 +102,8 @@ namespace Nekoyume.Action
                         break;
                 }
             }
+            states = states.SetState(AvatarAddress, avatarState.Serialize());
             states = states.SetState(RedeemCodeState.Address, redeemState.Serialize());
-            states = states.SetState(context.Signer, agentState.Serialize());
             return states;
         }
 

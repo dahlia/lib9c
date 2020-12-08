@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Nekoyume.Action;
 using Nekoyume.Battle;
 using Nekoyume.Model.BattleStatus;
 using Nekoyume.Model.Item;
 using Nekoyume.Model.Quest;
+using Nekoyume.Model.Stat;
 using Nekoyume.Model.State;
 using Nekoyume.TableData;
 using Inventory = Nekoyume.Model.Item.Inventory;
@@ -99,15 +101,15 @@ namespace Nekoyume.Model
         }
 
         public Player(
-            AvatarState avatarState, 
+            AvatarState avatarState,
             CharacterSheet characterSheet, 
             CharacterLevelSheet characterLevelSheet, 
             EquipmentItemSetEffectSheet equipmentItemSetEffectSheet
         ) : base(
-                null,
-                characterSheet,
-                avatarState.characterId,
-                avatarState.level)
+            null,
+            characterSheet,
+            avatarState.characterId,
+            avatarState.level)
         {
             // FIXME 중복 코드 제거할 것
             Exp.Current = avatarState.exp;
@@ -133,10 +135,10 @@ namespace Nekoyume.Model
             CharacterLevelSheet characterLevelSheet, 
             EquipmentItemSetEffectSheet equipmentItemSetEffectSheet
         ) : base(
-                null,
-                characterSheet,
-                GameConfig.DefaultAvatarCharacterId,
-                level)
+            null,
+            characterSheet,
+            GameConfig.DefaultAvatarCharacterId,
+            level)
         {
             Exp.Current = 0;
             Inventory = new Inventory();
@@ -246,7 +248,7 @@ namespace Nekoyume.Model
                         ring = equipment as Ring;
                         break;
                     default:
-                        throw new InvalidEquipmentException();
+                        throw new RequiredBlockIndexException();
                 }
             }
 
@@ -336,6 +338,21 @@ namespace Nekoyume.Model
             Skills.Add(skill);
         }
 
+        public void SetCostumeStat(CostumeStatSheet costumeStatSheet)
+        {
+            var statModifiers = new List<StatModifier>();
+            foreach (var itemId in _costumes.Select(costume => costume.Id))
+            {
+                statModifiers.AddRange(
+                    costumeStatSheet.OrderedList
+                        .Where(r => r.CostumeId == itemId)
+                        .Select(row => new StatModifier(row.StatType, StatModifier.OperationType.Add, (int) row.Stat))
+                );
+            }
+            Stats.SetOption(statModifiers);
+            Stats.EqualizeCurrentHPWithHP();
+        }
+
         public override object Clone()
         {
             return new Player(this);
@@ -351,9 +368,5 @@ namespace Nekoyume.Model
             Simulator.WaveTurn++;
             Simulator.Log.Add(new WaveTurnEnd(this, Simulator.TurnNumber, Simulator.WaveTurn));
         }
-    }
-
-    public class InvalidEquipmentException : Exception
-    {
     }
 }

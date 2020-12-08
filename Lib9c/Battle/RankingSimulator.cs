@@ -51,6 +51,31 @@ namespace Nekoyume.Battle
             WeeklyArenaRewardSheet = rankingSimulatorSheets.WeeklyArenaRewardSheet;
         }
 
+        public RankingSimulator(
+            IRandom random,
+            AvatarState avatarState,
+            AvatarState enemyAvatarState,
+            List<Guid> foods,
+            RankingSimulatorSheets rankingSimulatorSheets,
+            int stageId,
+            ArenaInfo arenaInfo,
+            ArenaInfo enemyInfo,
+            CostumeStatSheet costumeStatSheet
+        ) : this(
+            random,
+            avatarState,
+            enemyAvatarState,
+            foods,
+            rankingSimulatorSheets,
+            stageId,
+            arenaInfo,
+            enemyInfo
+        )
+        {
+            Player.SetCostumeStat(costumeStatSheet);
+            _enemyPlayer.SetCostumeStat(costumeStatSheet);
+        }
+
         public override Player Simulate()
         {
 #if TEST_LOG
@@ -135,7 +160,7 @@ namespace Nekoyume.Battle
 
             var itemSelector = new WeightedSelector<StageSheet.RewardData>(Random);
             var rewardSheet = WeeklyArenaRewardSheet;
-            foreach (var row in rewardSheet.Values)
+            foreach (var row in rewardSheet.OrderedList)
             {
                 var reward = row.Reward;
                 if (reward.RequiredLevel <= Player.Level)
@@ -145,7 +170,7 @@ namespace Nekoyume.Battle
             }
 
             var max = _arenaInfo.GetRewardCount();
-            _reward = SetReward(itemSelector, Random.Next(1, max + 1), Random, MaterialItemSheet);
+            _reward = SetReward(itemSelector, max, Random, MaterialItemSheet);
             var getReward = new GetReward(null, _reward);
             Log.Add(getReward);
             Log.result = Result;

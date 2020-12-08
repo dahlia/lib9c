@@ -3,11 +3,15 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+#if UNITY_EDITOR
 using System.Text;
+#endif
 using Bencodex.Types;
 using JetBrains.Annotations;
 using Nekoyume.Model.State;
+#if UNITY_EDITOR
 using Serilog;
+#endif
 
 namespace Nekoyume.TableData
 {
@@ -115,7 +119,9 @@ namespace Nekoyume.TableData
 
         public void Set<T>(Sheet<TKey, T> sheet, bool executePostSet = true) where T : TValue, new()
         {
+#pragma warning disable LAA1002
             foreach (var sheetRow in sheet)
+#pragma warning restore LAA1002
             {
                 AddRow(sheetRow.Key, sheetRow);
             }

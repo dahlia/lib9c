@@ -29,9 +29,14 @@ namespace Nekoyume.Model.Item
         }
 
         public override IValue Serialize() =>
+#pragma warning disable LAA1002
             new Dictionary(new Dictionary<IKey, IValue>
             {
-                [(Text) "stats"] = new List(Stats.Select(s => s.Serialize())),
+                [(Text) "stats"] = new List(Stats
+                    .OrderBy(i => i.StatType)
+                    .ThenByDescending(i => i.Value)
+                    .Select(s => s.Serialize())),
             }.Union((Dictionary) base.Serialize()));
+#pragma warning restore LAA1002
     }
 }

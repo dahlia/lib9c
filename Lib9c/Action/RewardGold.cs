@@ -40,10 +40,25 @@ namespace Nekoyume.Action
             {
                 BigInteger amount = distribution.GetAmount(index);
                 if (amount <= 0) continue;
+
+                // We should divide by 100 for only mainnet distributions.
+                // See also: https://github.com/planetarium/lib9c/pull/170#issuecomment-713380172
+                FungibleAssetValue fav = goldCurrency * amount;
+                var testAddresses = new HashSet<Address>(
+                    new []
+                    {
+                        new Address("F9A15F870701268Bd7bBeA6502eB15F4997f32f9"),
+                        new Address("Fb90278C67f9b266eA309E6AE8463042f5461449"),
+                    }
+                );
+                if (!testAddresses.Contains(distribution.Address))
+                {
+                    fav = fav.DivRem(100, out FungibleAssetValue _);
+                }
                 states = states.TransferAsset(
                     fund,
                     distribution.Address,
-                    goldCurrency * amount
+                    fav
                 );
             }
             return states;
@@ -51,7 +66,8 @@ namespace Nekoyume.Action
 
         public IAccountStateDelta WeeklyArenaRankingBoard(IActionContext ctx, IAccountStateDelta states)
         {
-            var index = Math.Max((int) ctx.BlockIndex / GameConfig.WeeklyArenaInterval, 0);
+            var gameConfigState = states.GetGameConfigState();
+            var index = Math.Max((int) ctx.BlockIndex / gameConfigState.WeeklyArenaInterval, 0);
             var weekly = states.GetWeeklyArenaState(index);
             var nextIndex = index + 1;
             var nextWeekly = states.GetWeeklyArenaState(nextIndex);
@@ -60,7 +76,8 @@ namespace Nekoyume.Action
                 nextWeekly = new WeeklyArenaState(nextIndex);
                 states = states.SetState(nextWeekly.address, nextWeekly.Serialize());
             }
-            if (ctx.BlockIndex % GameConfig.WeeklyArenaInterval == 0 && index > 0)
+
+            if (ctx.BlockIndex % gameConfigState.WeeklyArenaInterval == 0 && index > 0)
             {
                 var prevWeekly = states.GetWeeklyArenaState(index - 1);
                 if (!prevWeekly.Ended)
@@ -71,7 +88,7 @@ namespace Nekoyume.Action
                     states = states.SetState(weekly.address, weekly.Serialize());
                 }
             }
-            else if (ctx.BlockIndex - weekly.ResetIndex >= GameConfig.DailyArenaInterval)
+            else if (ctx.BlockIndex - weekly.ResetIndex >= gameConfigState.DailyArenaInterval)
             {
                 weekly.ResetCount(ctx.BlockIndex);
                 states = states.SetState(weekly.address, weekly.Serialize());
@@ -84,14 +101,22 @@ namespace Nekoyume.Action
         {
             // 마이닝 보상
             // https://www.notion.so/planetarium/Mining-Reward-b7024ef463c24ebca40a2623027d497d
-            BigInteger defaultMiningReward = 10;
-            var countOfHalfLife = Convert.ToInt64(ctx.BlockIndex / 12614400) + 1;
-            var miningReward = defaultMiningReward / countOfHalfLife;
-            return states.TransferAsset(
-                GoldCurrencyState.Address,
-                ctx.Miner,
-                states.GetGoldCurrency() * miningReward
-            );
+            Currency currency = states.GetGoldCurrency();
+            FungibleAssetValue defaultMiningReward = currency * 10;
+            var countOfHalfLife = (int)Math.Pow(2, Convert.ToInt64((ctx.BlockIndex - 1) / 12614400));
+            FungibleAssetValue miningReward = 
+                defaultMiningReward.DivRem(countOfHalfLife, out FungibleAssetValue _);
+
+            if (miningReward >= FungibleAssetValue.Parse(currency, "1.25"))
+            {
+                states = states.TransferAsset(
+                    GoldCurrencyState.Address,
+                    ctx.Miner,
+                    miningReward
+                );
+            }
+            
+            return states;
         }
     }
 }

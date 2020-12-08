@@ -14,7 +14,9 @@ namespace Nekoyume.Model.Quest
 
         public QuestReward(Dictionary<int, int> map)
         {
-            ItemMap = map;
+            ItemMap = map
+                .ToDictionary(kv => kv.Key, kv => kv.Value
+            );
         }
 
         public QuestReward(Dictionary serialized)
@@ -26,12 +28,14 @@ namespace Nekoyume.Model.Quest
         }
 
         public IValue Serialize() => new Dictionary(
+#pragma warning disable LAA1002
             ItemMap.Select(kv =>
                 new KeyValuePair<IKey, IValue>(
                     (Text)kv.Key.ToString(CultureInfo.InvariantCulture),
                     (Text)kv.Value.ToString(CultureInfo.InvariantCulture)
                 )
             )
+#pragma warning restore LAA1002
         );
     }
 }

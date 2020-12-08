@@ -91,7 +91,7 @@ namespace Nekoyume.Model.Item
         private readonly List<Item> _items = new List<Item>();
 
         public IReadOnlyList<Item> Items => _items;
-        
+
         public IEnumerable<Costume> Costumes => _items
             .Select(item => item.item)
             .OfType<Costume>();
@@ -118,8 +118,10 @@ namespace Nekoyume.Model.Item
             _items.Sort();
         }
 
-        public IValue Serialize() =>
-            new Bencodex.Types.List(Items.Select(i => i.Serialize()));
+        public IValue Serialize() => new Bencodex.Types.List(Items
+            .OrderBy(i => i.item.Id)
+            .ThenByDescending(i => i.count)
+            .Select(i => i.Serialize()));
 
         #region Add
 
@@ -349,31 +351,6 @@ namespace Nekoyume.Model.Item
             return false;
         }
 
-        public bool TryGetAddedItemFrom(Inventory inventory, out ItemUsable outAddedItem)
-        {
-            //FIXME TryGetNonFungibleItem 내부에서 사용되는 아이템 비교방식때문에 오동작처리됨.
-            //https://app.asana.com/0/958521740385861/1131813492738090/
-            var newItem = _items.FirstOrDefault(i => !inventory.Items.Contains(i));
-            outAddedItem = null;
-            if (newItem is null)
-            {
-                return false;
-            }
-
-            try
-            {
-                outAddedItem = (ItemUsable) newItem.item;
-            }
-            catch (InvalidCastException)
-            {
-                var item = newItem.item;
-
-                Log.Error("Item {0}: {1} is not ItemUsable.", item.ItemType, item.Id);
-            }
-
-            return !(outAddedItem is null);
-        }
-
         public bool TryGetNonFungibleItem(Guid itemId, out ItemUsable outNonFungibleItem)
         {
             foreach (var item in _items)
@@ -423,23 +400,31 @@ namespace Nekoyume.Model.Item
 
         #endregion
 
-        public bool HasNotification()
+        public bool HasNotification(int level)
         {
-            foreach (var subType in new [] {ItemSubType.Weapon, ItemSubType.Armor, ItemSubType.Belt, ItemSubType.Necklace, ItemSubType.Ring})
+            var availableSlots = UnlockHelper.GetAvailableEquipmentSlots(level);
+
+            foreach (var (type, slotCount) in availableSlots)
             {
-                var equipments = Equipments.Where(e => e.ItemSubType == subType).ToList();
-                var current = equipments.FirstOrDefault(e => e.equipped);
-                //현재 장착안한 슬롯에 장착 가능한 장비가 있는 경우
-                if (current is null && equipments.Any())
+                var equipments = Equipments.Where(e => e.ItemSubType == type);
+                var current = equipments.Where(e => e.equipped);
+                // When an equipment slot is empty.
+                if (current.Count() < Math.Min(equipments.Count(), slotCount))
                 {
                     return true;
                 }
 
-                var hasNotification = equipments.Any(e => CPHelper.GetCP(e) > CPHelper.GetCP(current));
-                // 현재장착한 장비보다 강한 장비가 있는 경우
-                if (hasNotification)
+                // When any other equipments are stronger than current one.
+                foreach (var equipment in equipments)
                 {
-                    return true;
+                    if (equipment.equipped)
+                        continue;
+
+                    var cp = CPHelper.GetCP(equipment);
+                    if (current.Any(i => CPHelper.GetCP(i) < cp))
+                    {
+                        return true;
+                    }
                 }
             }
 

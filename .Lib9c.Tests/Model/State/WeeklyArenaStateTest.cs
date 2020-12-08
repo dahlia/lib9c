@@ -3,6 +3,7 @@ namespace Lib9c.Tests.Model.State
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Runtime.Serialization.Formatters.Binary;
     using Bencodex.Types;
     using Libplanet;
@@ -32,42 +33,6 @@ namespace Lib9c.Tests.Model.State
         {
             var state = new WeeklyArenaState(index);
             Assert.Equal(new Address(expected), state.address);
-        }
-
-        [Fact]
-        public void GetAgentAddresses()
-        {
-            var privateKey = new PrivateKey();
-            var agentAddress = privateKey.PublicKey.ToAddress();
-
-            var avatarAddress = agentAddress.Derive("avatar");
-            var characterSheet = new CharacterSheet();
-            characterSheet.Set(_sheets[nameof(CharacterSheet)]);
-
-            var avatarState = new AvatarState(
-                avatarAddress,
-                default,
-                0,
-                _tableSheets.GetAvatarSheets(),
-                new GameConfigState()
-            );
-
-            var avatarAddress2 = agentAddress.Derive("avatar2");
-            var avatarState2 = new AvatarState(
-                avatarAddress2,
-                default,
-                0,
-                _tableSheets.GetAvatarSheets(),
-                new GameConfigState()
-            );
-
-            var state = new WeeklyArenaState(0);
-            state.Set(avatarState, characterSheet);
-            state[avatarAddress].Activate();
-            state.Set(avatarState2, characterSheet);
-            state[avatarAddress2].Activate();
-
-            Assert.Single(state.GetAgentAddresses(2));
         }
 
         [Fact]
@@ -123,7 +88,12 @@ namespace Lib9c.Tests.Model.State
         [InlineData(10, 1, 1, 1)]
         [InlineData(10, 6, 50, 5)]
         [InlineData(10, 6, 1, 1)]
-        public void GetArenaInfosByFirstRankAndCount(int infoCount, int firstRank, int count, int expected)
+        [InlineData(0, 1, 1, 0)]
+        public void GetArenaInfosByFirstRankAndCount(
+            int infoCount,
+            int firstRank,
+            int count,
+            int expectedCount)
         {
             var weeklyArenaState = new WeeklyArenaState(new PrivateKey().ToAddress());
             var characterSheet = new CharacterSheet();
@@ -137,14 +107,21 @@ namespace Lib9c.Tests.Model.State
                     0L,
                     _tableSheets.GetAvatarSheets(),
                     new GameConfigState(),
+                    default,
                     i.ToString());
                 weeklyArenaState.Add(
                     new PrivateKey().ToAddress(),
-                    new ArenaInfo(avatarState, characterSheet, true));
+                    new ArenaInfo(avatarState, characterSheet, new CostumeStatSheet(), true));
             }
 
             var arenaInfos = weeklyArenaState.GetArenaInfos(firstRank, count);
-            Assert.Equal(expected, arenaInfos.Count);
+            Assert.Equal(expectedCount, arenaInfos.Count);
+
+            var expectedRank = firstRank;
+            foreach (var arenaInfo in arenaInfos)
+            {
+                Assert.Equal(expectedRank++, arenaInfo.rank);
+            }
         }
 
         [Theory]
@@ -164,10 +141,11 @@ namespace Lib9c.Tests.Model.State
                     0L,
                     _tableSheets.GetAvatarSheets(),
                     new GameConfigState(),
+                    default,
                     i.ToString());
                 weeklyArenaState.Add(
                     new PrivateKey().ToAddress(),
-                    new ArenaInfo(avatarState, characterSheet, true));
+                    new ArenaInfo(avatarState, characterSheet, new CostumeStatSheet(), true));
             }
 
             Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -178,7 +156,12 @@ namespace Lib9c.Tests.Model.State
         [InlineData(100, 1, 10, 10, 11)]
         [InlineData(100, 50, 10, 10, 21)]
         [InlineData(100, 100, 10, 10, 11)]
-        public void GetArenaInfosByUpperAndLowerRange(int infoCount, int targetRank, int upperRange, int lowerRange, int expected)
+        public void GetArenaInfosByUpperAndLowerRange(
+            int infoCount,
+            int targetRank,
+            int upperRange,
+            int lowerRange,
+            int expectedCount)
         {
             var weeklyArenaState = new WeeklyArenaState(new PrivateKey().ToAddress());
             Address targetAddress;
@@ -198,14 +181,21 @@ namespace Lib9c.Tests.Model.State
                     0L,
                     _tableSheets.GetAvatarSheets(),
                     new GameConfigState(),
+                    default,
                     i.ToString());
                 weeklyArenaState.Add(
                     new PrivateKey().ToAddress(),
-                    new ArenaInfo(avatarState, characterSheet, true));
+                    new ArenaInfo(avatarState, characterSheet, new CostumeStatSheet(), true));
             }
 
             var arenaInfos = weeklyArenaState.GetArenaInfos(targetAddress, upperRange, lowerRange);
-            Assert.Equal(expected, arenaInfos.Count);
+            Assert.Equal(expectedCount, arenaInfos.Count);
+
+            var expectedRank = Math.Max(1, targetRank - upperRange);
+            foreach (var arenaInfo in arenaInfos)
+            {
+                Assert.Equal(expectedRank++, arenaInfo.rank);
+            }
         }
     }
 }
