@@ -3,6 +3,7 @@ using Libplanet;
 using Libplanet.Action;
 using Libplanet.Blockchain.Renderers;
 using Libplanet.Blocks;
+using Nekoyume.Action;
 using static Nekoyume.Action.ActionBase;
 using Serilog;
 #if UNITY_EDITOR || UNITY_STANDALONE
@@ -12,7 +13,7 @@ using System.Reactive.Subjects;
 using System.Reactive.Linq;
 #endif
 
-namespace Nekoyume.Action
+namespace Lib9c.Renderer
 {
     using NCAction = PolymorphicAction<ActionBase>;
     using NCBlock = Block<PolymorphicAction<ActionBase>>;
@@ -24,6 +25,9 @@ namespace Nekoyume.Action
 
         public Subject<ActionEvaluation<ActionBase>> ActionUnrenderSubject { get; }
             = new Subject<ActionEvaluation<ActionBase>>();
+
+        public readonly Subject<(NCBlock OldTip, NCBlock NewTip)> BlockEndSubject =
+            new Subject<(NCBlock OldTip, NCBlock NewTip)>();
 
         public void RenderAction(
             IAction action,
@@ -63,7 +67,7 @@ namespace Nekoyume.Action
             Exception exception
         )
         {
-            Log.Error(exception, "{action} exeuction failed.", action);
+            Log.Error(exception, "{action} execution failed.", action);
             ActionRenderSubject.OnNext(new ActionEvaluation<ActionBase>()
             {
                 Action = GetActionBase(action),
@@ -100,6 +104,14 @@ namespace Nekoyume.Action
             // RenderBlock should be handled by BlockRenderer
         }
 
+        public void RenderBlockEnd(
+            NCBlock oldTip,
+            NCBlock newTip
+        )
+        {
+            BlockEndSubject.OnNext((oldTip, newTip));
+        }
+
         public void RenderReorg(
             NCBlock oldTip,
             NCBlock newTip,
@@ -107,6 +119,15 @@ namespace Nekoyume.Action
         )
         {
             // RenderReorg should be handled by BlockRenderer
+        }
+
+        public void RenderReorgEnd(
+            NCBlock oldTip,
+            NCBlock newTip,
+            NCBlock branchpoint
+        )
+        {
+            // RenderReorgEnd should be handled by BlockRenderer
         }
 
         public IObservable<ActionEvaluation<T>> EveryRender<T>()
@@ -170,6 +191,9 @@ namespace Nekoyume.Action
                 PreviousStates = eval.PreviousStates,
             });
         }
+
+        public IObservable<(NCBlock OldTip, NCBlock NewTip)> EveryBlockEnd() =>
+            BlockEndSubject.AsObservable();
 
         private static ActionBase GetActionBase(IAction action)
         {

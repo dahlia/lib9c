@@ -209,7 +209,7 @@ namespace Nekoyume.Action
             avatarState.actionPoint -= requiredActionPoint;
             if (!(optionIds is null))
             {
-                foreach (var id in optionIds)
+                foreach (var id in optionIds.OrderBy(id => id))
                 {
                     agentState.unlockedOptions.Add(id);
                 }
@@ -301,6 +301,7 @@ namespace Nekoyume.Action
             var optionSelector = new WeightedSelector<EquipmentItemOptionSheet.Row>(random);
             var optionIds = new HashSet<int>();
 
+            // Skip sort subRecipe.Options because it had been already sorted in WeightedSelector.Select();
             foreach (var optionInfo in subRecipe.Options)
             {
                 if (!optionSheet.TryGetValue(optionInfo.Id, out var optionRow))
@@ -326,7 +327,7 @@ namespace Nekoyume.Action
             }
             finally
             {
-                foreach (var optionRow in optionRows)
+                foreach (var optionRow in optionRows.OrderBy(r => r.Id))
                 {
                     if (optionRow.StatType != StatType.NONE)
                     {

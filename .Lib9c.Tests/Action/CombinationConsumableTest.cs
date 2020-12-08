@@ -50,7 +50,8 @@ namespace Lib9c.Tests.Action
                 _agentAddress,
                 1,
                 _tableSheets.GetAvatarSheets(),
-                gameConfigState
+                gameConfigState,
+                default
             );
             var row = _tableSheets.ConsumableItemRecipeSheet.Values.First();
             foreach (var materialInfo in row.Materials)
@@ -98,6 +99,53 @@ namespace Lib9c.Tests.Action
 
             var consumable = (Consumable)slotState.Result.itemUsable;
             Assert.NotNull(consumable);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData(1)]
+        public void ResultModelDeterministic(int? subRecipeId)
+        {
+            var row = _tableSheets.MaterialItemSheet.Values.First();
+            var row2 = _tableSheets.MaterialItemSheet.Values.Last();
+
+            Assert.True(row.Id < row2.Id);
+
+            var material = ItemFactory.CreateMaterial(row);
+            var material2 = ItemFactory.CreateMaterial(row2);
+
+            var itemUsable = ItemFactory.CreateItemUsable(_tableSheets.EquipmentItemSheet.Values.First(), default, 0);
+            var result = new CombinationConsumable.ResultModel()
+            {
+                id = default,
+                gold = 0,
+                actionPoint = 0,
+                recipeId = 1,
+                subRecipeId = subRecipeId,
+                materials = new Dictionary<Material, int>()
+                {
+                    [material] = 1,
+                    [material2] = 1,
+                },
+                itemUsable = itemUsable,
+            };
+
+            var result2 = new CombinationConsumable.ResultModel()
+            {
+                id = default,
+                gold = 0,
+                actionPoint = 0,
+                recipeId = 1,
+                subRecipeId = subRecipeId,
+                materials = new Dictionary<Material, int>()
+                {
+                    [material2] = 1,
+                    [material] = 1,
+                },
+                itemUsable = itemUsable,
+            };
+
+            Assert.Equal(result.Serialize(), result2.Serialize());
         }
     }
 }

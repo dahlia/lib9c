@@ -168,7 +168,7 @@ namespace Nekoyume.Action
                 return LogError(context, "Aborted as the recipe was failed to load.");
             }
             var materials = new Dictionary<Material, int>();
-            foreach (var materialInfo in recipeRow.Materials)
+            foreach (var materialInfo in recipeRow.Materials.OrderBy(r => r.Id))
             {
                 var materialId = materialInfo.Id;
                 var count = materialInfo.Count;
@@ -255,7 +255,7 @@ namespace Nekoyume.Action
             var materialSheet = states.GetSheet<MaterialItemSheet>();
             avatarState.UpdateQuestRewards(materialSheet);
 
-            avatarState.updatedAt = DateTimeOffset.UtcNow;
+            avatarState.updatedAt = ctx.BlockIndex;
             avatarState.blockIndex = ctx.BlockIndex;
             states = states.SetState(AvatarAddress, avatarState.Serialize());
             slotState.Update(result, ctx.BlockIndex, requiredBlockIndex);

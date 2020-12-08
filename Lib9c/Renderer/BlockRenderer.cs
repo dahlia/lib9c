@@ -2,7 +2,7 @@ using System;
 using Libplanet.Action;
 using Libplanet.Blockchain.Renderers;
 using Libplanet.Blocks;
-using static Nekoyume.Action.ActionBase;
+using Nekoyume.Action;
 #if UNITY_EDITOR || UNITY_STANDALONE
 using UniRx;
 #else
@@ -10,17 +10,20 @@ using System.Reactive.Subjects;
 using System.Reactive.Linq;
 #endif
 
-namespace Nekoyume.Action
+namespace Lib9c.Renderer
 {
     using NCAction = PolymorphicAction<ActionBase>;
     using NCBlock = Block<PolymorphicAction<ActionBase>>;
 
     public class BlockRenderer : IRenderer<NCAction>
     {
-        private readonly Subject<(NCBlock OldTip, NCBlock NewTip)> _blockSubject =
+        public readonly Subject<(NCBlock OldTip, NCBlock NewTip)> BlockSubject =
             new Subject<(NCBlock OldTip, NCBlock NewTip)>();
 
-        private readonly Subject<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)> _reorgSubject =
+        public readonly Subject<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)> ReorgSubject =
+            new Subject<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)>();
+
+        public readonly Subject<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)> ReorgEndSubject =
             new Subject<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)>();
 
         public void RenderBlock(
@@ -28,7 +31,7 @@ namespace Nekoyume.Action
             NCBlock newTip
         )
         {
-            _blockSubject.OnNext((oldTip, newTip));
+            BlockSubject.OnNext((oldTip, newTip));
         }
 
         public void RenderReorg(
@@ -37,14 +40,25 @@ namespace Nekoyume.Action
             NCBlock branchpoint
         )
         {
-            _reorgSubject.OnNext((oldTip, newTip, branchpoint));
+            ReorgSubject.OnNext((oldTip, newTip, branchpoint));
         }
 
+        public void RenderReorgEnd(
+            NCBlock oldTip,
+            NCBlock newTip,
+            NCBlock branchpoint
+        ) =>
+            ReorgEndSubject.OnNext((oldTip, newTip, branchpoint));
+
         public IObservable<(NCBlock OldTip, NCBlock NewTip)> EveryBlock() =>
-            _blockSubject.AsObservable();
+            BlockSubject.AsObservable();
 
         public IObservable<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)>
             EveryReorg() =>
-            _reorgSubject.AsObservable();
+            ReorgSubject.AsObservable();
+
+        public IObservable<(NCBlock OldTip, NCBlock NewTip, NCBlock Branchpoint)>
+            EveryReorgEnd() =>
+            ReorgEndSubject.AsObservable();
     }
 }

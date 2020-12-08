@@ -4,15 +4,16 @@ using System.Collections.Immutable;
 using System.Linq;
 using Bencodex.Types;
 using Lib9c;
-using Libplanet.Action;
+using Lib9c.Renderer;
 using Libplanet.Blockchain;
 using Libplanet.Blockchain.Policies;
-using Libplanet.Blocks;
 using Libplanet.Tx;
 using Nekoyume.Action;
 using Nekoyume.Model.State;
 using Libplanet;
 using Libplanet.Blockchain.Renderers;
+using Serilog;
+using Serilog.Events;
 #if UNITY_EDITOR || UNITY_STANDALONE
 using UniRx;
 #else
@@ -27,68 +28,72 @@ namespace Nekoyume.BlockChain
     {
         private readonly TimeSpan _blockInterval = TimeSpan.FromSeconds(8);
 
-        public readonly BlockRenderer BlockRenderer = new BlockRenderer();
-
         public readonly ActionRenderer ActionRenderer = new ActionRenderer();
 
-        public BlockPolicySource()
+        public readonly BlockRenderer BlockRenderer = new BlockRenderer();
+
+        public readonly LoggedActionRenderer<NCAction> LoggedActionRenderer;
+
+        public readonly LoggedRenderer<NCAction> LoggedBlockRenderer;
+
+        public BlockPolicySource(ILogger logger, LogEventLevel logEventLevel = LogEventLevel.Verbose)
         {
-            BlockRenderer
-                .EveryBlock()
-                .Subscribe(_ => UpdateActivationSet());
+            LoggedActionRenderer =
+                new LoggedActionRenderer<NCAction>(ActionRenderer, logger, logEventLevel);
 
-            BlockRenderer
-                .EveryReorg()
-                .Subscribe(_ => UpdateActivationSet());
-        }
-
-        public Func<IValue> ActivatedAccountsStateGetter { get; set; }
-
-        public IImmutableSet<Address> ActivatedAccounts { get; private set; }
-
-        public void UpdateActivationSet(IValue state)
-        {
-            ActivatedAccounts = new ActivatedAccountsState((Dictionary)state).Accounts;
+            LoggedBlockRenderer =
+                new LoggedRenderer<NCAction>(BlockRenderer, logger, logEventLevel);
         }
 
         // FIXME 남은 설정들도 설정화 해야 할지도?
-        public IBlockPolicy<PolymorphicAction<ActionBase>> GetPolicy(int minimumDifficulty)
+        public IBlockPolicy<NCAction> GetPolicy(int minimumDifficulty)
         {
-            ActivatedAccounts = ActivatedAccounts?.Clear();
 #if UNITY_EDITOR
             return new DebugPolicy();
 #else
-            return new BlockPolicy<PolymorphicAction<ActionBase>>(
+            return new BlockPolicy(
                 new RewardGold(),
                 _blockInterval,
                 minimumDifficulty,
                 2048,
-                doesTransactionFollowPolicy: IsSignerAuthorized
+                IsSignerAuthorized
             );
 #endif
         }
 
         public IEnumerable<IRenderer<NCAction>> GetRenderers() =>
-            new IRenderer<NCAction>[] { BlockRenderer, ActionRenderer };
+            new IRenderer<NCAction>[] { BlockRenderer, LoggedActionRenderer };
 
-        private bool IsSignerAuthorized(Transaction<PolymorphicAction<ActionBase>> transaction)
+        private bool IsSignerAuthorized(
+            Transaction<NCAction> transaction,
+            BlockChain<NCAction> blockChain
+        )
         {
-            bool isActivateAccountAction =
-                transaction.Actions.Count == 1
-                && transaction.Actions.First().InnerAction is ActivateAccount;
-
-            return isActivateAccountAction
-                   || ActivatedAccounts is null
-                   || !ActivatedAccounts.Any()
-                   || ActivatedAccounts.Contains(transaction.Signer);
-        }
-
-        private void UpdateActivationSet()
-        {
-            if (!(ActivatedAccountsStateGetter is null))
+            if (transaction.Actions.Count == 1 &&
+                transaction.Actions.First().InnerAction is ActivateAccount)
             {
-                IValue state = ActivatedAccountsStateGetter();
-                UpdateActivationSet(state);
+                return true;
+            }
+
+            try
+            {
+                if (blockChain.GetState(ActivatedAccountsState.Address) is Dictionary asDict)
+                {
+                    IImmutableSet<Address> activatedAccounts =
+                        new ActivatedAccountsState(asDict).Accounts;
+                    return !activatedAccounts.Any() ||
+                        activatedAccounts.Contains(transaction.Signer);
+                }
+                else
+                {
+                    return true;
+                }
+            }
+            catch (IncompleteBlockStatesException)
+            {
+                // It can be caused during `Swarm<T>.PreloadAsync()` because it doesn't fill its 
+                // state right away...
+                return true;
             }
         }
     }

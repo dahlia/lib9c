@@ -135,7 +135,7 @@ namespace Nekoyume.Battle
 
             var itemSelector = new WeightedSelector<StageSheet.RewardData>(Random);
             var rewardSheet = WeeklyArenaRewardSheet;
-            foreach (var row in rewardSheet.Values)
+            foreach (var row in rewardSheet.OrderedList)
             {
                 var reward = row.Reward;
                 if (reward.RequiredLevel <= Player.Level)
@@ -145,7 +145,7 @@ namespace Nekoyume.Battle
             }
 
             var max = _arenaInfo.GetRewardCount();
-            _reward = SetReward(itemSelector, Random.Next(1, max + 1), Random, MaterialItemSheet);
+            _reward = SetReward(itemSelector, max, Random, MaterialItemSheet);
             var getReward = new GetReward(null, _reward);
             Log.Add(getReward);
             Log.result = Result;

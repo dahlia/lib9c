@@ -20,6 +20,8 @@ namespace Nekoyume.Action
     [ActionType("item_enhancement")]
     public class ItemEnhancement : GameAction
     {
+        public const int RequiredBlockCount = 1;
+
         public static readonly Address BlacksmithAddress = Addresses.Blacksmith;
 
         public Guid itemId;
@@ -53,10 +55,12 @@ namespace Nekoyume.Action
                 new Bencodex.Types.Dictionary(new Dictionary<IKey, IValue>
                 {
                     [(Text) "id"] = id.Serialize(),
-                    [(Text) "materialItemIdList"] =  materialItemIdList.Select(g => g.Serialize()).Serialize(),
+                    [(Text) "materialItemIdList"] = materialItemIdList
+                        .OrderBy(i => i)
+                        .Select(g => g.Serialize()).Serialize(),
                     [(Text) "gold"] = gold.Serialize(),
                     [(Text) "actionPoint"] = actionPoint.Serialize(),
-                }.Union((Bencodex.Types.Dictionary)base.Serialize()));
+                }.Union((Bencodex.Types.Dictionary) base.Serialize()));
         }
 
         public override IAccountStateDelta Execute(IActionContext context)
@@ -73,7 +77,7 @@ namespace Nekoyume.Action
             if (ctx.Rehearsal)
             {
                 return states
-                    .MarkBalanceChanged(GoldCurrencyMock, BlacksmithAddress)
+                    .MarkBalanceChanged(GoldCurrencyMock, ctx.Signer, BlacksmithAddress)
                     .SetState(avatarAddress, MarkChanged)
                     .SetState(slotAddress, MarkChanged);
             }
@@ -175,7 +179,7 @@ namespace Nekoyume.Action
             }
 
             var materials = new List<Equipment>();
-            foreach (var materialId in materialIds)
+            foreach (var materialId in materialIds.OrderBy(guid => guid))
             {
                 if (!avatarState.inventory.TryGetNonFungibleItem(materialId, out ItemUsable materialItem))
                 {
@@ -268,6 +272,9 @@ namespace Nekoyume.Action
             enhancementEquipment.Unequip();
 
             enhancementEquipment = UpgradeEquipment(enhancementEquipment);
+
+            var requiredBlockIndex = ctx.BlockIndex + RequiredBlockCount;
+            enhancementEquipment.Update(requiredBlockIndex);
             sw.Stop();
             Log.Debug("ItemEnhancement Upgrade Equipment: {Elapsed}", sw.Elapsed);
             sw.Restart();
@@ -281,7 +288,7 @@ namespace Nekoyume.Action
             sw.Stop();
             Log.Debug("ItemEnhancement Remove Materials: {Elapsed}", sw.Elapsed);
             sw.Restart();
-            var mail = new ItemEnhanceMail(result, ctx.BlockIndex, ctx.Random.GenerateRandomGuid(), ctx.BlockIndex);
+            var mail = new ItemEnhanceMail(result, ctx.BlockIndex, ctx.Random.GenerateRandomGuid(), requiredBlockIndex);
             result.id = mail.id;
 
             avatarState.inventory.RemoveNonFungibleItem(enhancementEquipment);
@@ -291,7 +298,7 @@ namespace Nekoyume.Action
             var materialSheet = states.GetSheet<MaterialItemSheet>();
             avatarState.UpdateQuestRewards(materialSheet);
 
-            slotState.Update(result, ctx.BlockIndex, ctx.BlockIndex);
+            slotState.Update(result, ctx.BlockIndex, requiredBlockIndex);
 
             sw.Stop();
             Log.Debug("ItemEnhancement Update AvatarState: {Elapsed}", sw.Elapsed);
@@ -311,7 +318,10 @@ namespace Nekoyume.Action
                 var dict = new Dictionary<string, IValue>
                 {
                     ["itemId"] = itemId.Serialize(),
-                    ["materialIds"] = materialIds.Select(g => g.Serialize()).Serialize(),
+                    ["materialIds"] = materialIds
+                        .OrderBy(i => i)
+                        .Select(g => g.Serialize())
+                        .Serialize(),
                     ["avatarAddress"] = avatarAddress.Serialize(),
                 };
 
@@ -339,7 +349,7 @@ namespace Nekoyume.Action
         private BigInteger GetRequiredNCG(EnhancementCostSheet costSheet, int grade, int level)
         {
             var row = costSheet
-                .Values
+                .OrderedList
                 .FirstOrDefault(x => x.Grade == grade && x.Level == level);
 
             return row is null ? 0 : row.Cost;

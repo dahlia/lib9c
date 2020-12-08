@@ -1,5 +1,6 @@
 namespace Lib9c.Tests
 {
+    using System;
     using System.Collections.Immutable;
     using System.Threading.Tasks;
     using Bencodex.Types;
@@ -8,14 +9,15 @@ namespace Lib9c.Tests
     using Libplanet.Assets;
     using Libplanet.Blockchain;
     using Libplanet.Blockchain.Policies;
-    using Libplanet.Blockchain.Renderers;
     using Libplanet.Blocks;
     using Libplanet.Crypto;
     using Libplanet.Store;
     using Libplanet.Tx;
     using Nekoyume.Action;
     using Nekoyume.BlockChain;
+    using Nekoyume.Model;
     using Nekoyume.Model.State;
+    using Serilog.Core;
     using Xunit;
 
     public class BlockPolicyTest
@@ -25,7 +27,7 @@ namespace Lib9c.Tests
         {
             var adminPrivateKey = new PrivateKey();
             var adminAddress = new Address(adminPrivateKey.PublicKey);
-            var blockPolicySource = new BlockPolicySource();
+            var blockPolicySource = new BlockPolicySource(Logger.None);
             IBlockPolicy<PolymorphicAction<ActionBase>> policy = blockPolicySource.GetPolicy(10000);
             Block<PolymorphicAction<ActionBase>> genesis = MakeGenesisBlock(adminAddress, ImmutableHashSet<Address>.Empty);
 
@@ -37,15 +39,13 @@ namespace Lib9c.Tests
                 genesis,
                 renderers: new[] { blockPolicySource.BlockRenderer }
             );
-            blockPolicySource.ActivatedAccountsStateGetter = () => blockChain.GetState(ActivatedAccountsState.Address);
-            blockPolicySource.UpdateActivationSet(blockPolicySource.ActivatedAccountsStateGetter());
             Transaction<PolymorphicAction<ActionBase>> tx = Transaction<PolymorphicAction<ActionBase>>.Create(
                 0,
                 new PrivateKey(),
                 genesis.Hash,
                 new PolymorphicAction<ActionBase>[] { });
 
-            Assert.True(policy.DoesTransactionFollowsPolicy(tx));
+            Assert.True(policy.DoesTransactionFollowsPolicy(tx, blockChain));
         }
 
         [Fact]
@@ -56,7 +56,7 @@ namespace Lib9c.Tests
             var activatedPrivateKey = new PrivateKey();
             var activatedAddress = activatedPrivateKey.ToAddress();
 
-            var blockPolicySource = new BlockPolicySource();
+            var blockPolicySource = new BlockPolicySource(Logger.None);
             IBlockPolicy<PolymorphicAction<ActionBase>> policy = blockPolicySource.GetPolicy(10000);
             Block<PolymorphicAction<ActionBase>> genesis = MakeGenesisBlock(
                 adminAddress,
@@ -70,8 +70,6 @@ namespace Lib9c.Tests
                 genesis,
                 renderers: new[] { blockPolicySource.BlockRenderer }
             );
-            blockPolicySource.ActivatedAccountsStateGetter = () => blockChain.GetState(ActivatedAccountsState.Address);
-            blockPolicySource.UpdateActivationSet(blockPolicySource.ActivatedAccountsStateGetter());
             Transaction<PolymorphicAction<ActionBase>> txByStranger =
                 Transaction<PolymorphicAction<ActionBase>>.Create(
                     0,
@@ -81,7 +79,7 @@ namespace Lib9c.Tests
                 );
 
             // 새로 만든 키는 활성화 유저 리스트에 없기 때문에 차단됩니다.
-            Assert.False(policy.DoesTransactionFollowsPolicy(txByStranger));
+            Assert.False(policy.DoesTransactionFollowsPolicy(txByStranger, blockChain));
 
             var newActivatedPrivateKey = new PrivateKey();
             var newActivatedAddress = newActivatedPrivateKey.ToAddress();
@@ -103,35 +101,230 @@ namespace Lib9c.Tests
                 );
 
             // 활성화 된 계정이기 때문에 테스트에 성공합니다.
-            Assert.True(policy.DoesTransactionFollowsPolicy(txByNewActivated));
+            Assert.True(policy.DoesTransactionFollowsPolicy(txByNewActivated, blockChain));
+        }
+
+        [Fact]
+        public async Task ValidateNextBlockWithAuthorizedMinersState()
+        {
+            var adminPrivateKey = new PrivateKey();
+            var adminAddress = adminPrivateKey.ToAddress();
+            var miners = new[]
+            {
+                new Address(
+                    new byte[]
+                    {
+                        0x01, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                    }
+                ),
+                new Address(
+                    new byte[]
+                    {
+                        0x02, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00,
+                    }
+                ),
+            };
+            var stranger = new Address(
+                new byte[]
+                {
+                    0x03, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00,
+                }
+            );
+
+            var blockPolicySource = new BlockPolicySource(Logger.None);
+            IBlockPolicy<PolymorphicAction<ActionBase>> policy = blockPolicySource.GetPolicy(10000);
+            Block<PolymorphicAction<ActionBase>> genesis = MakeGenesisBlock(
+                adminAddress,
+                ImmutableHashSet<Address>.Empty,
+                new AuthorizedMinersState(miners, 2, 4)
+            );
+            using var store = new DefaultStore(null);
+            var blockChain = new BlockChain<PolymorphicAction<ActionBase>>(
+                policy,
+                store,
+                store,
+                genesis,
+                renderers: new[] { blockPolicySource.BlockRenderer }
+            );
+
+            if (policy is BlockPolicy bp)
+            {
+                bp.AuthorizedMinersState = new AuthorizedMinersState(
+                    (Dictionary)blockChain.GetState(AuthorizedMinersState.Address)
+                    );
+            }
+
+            await blockChain.MineBlock(stranger);
+
+            await Assert.ThrowsAsync<InvalidMinerException>(async () =>
+            {
+                await blockChain.MineBlock(stranger);
+            });
+
+            await blockChain.MineBlock(miners[0]);
+
+            // it's okay because next block index is 3
+            await blockChain.MineBlock(stranger);
+
+            // it isn't :(
+            await Assert.ThrowsAsync<InvalidMinerException>(async () =>
+            {
+                await blockChain.MineBlock(stranger);
+            });
+
+            await blockChain.MineBlock(miners[1]);
+
+            // it's okay because block index exceeds limitations.
+            await blockChain.MineBlock(stranger);
+        }
+
+        [Fact]
+        public async Task GetNextBlockDifficultyWithAuthorizedMinersState()
+        {
+            var adminPrivateKey = new PrivateKey();
+            var adminAddress = adminPrivateKey.ToAddress();
+            var miner = new PrivateKey().ToAddress();
+            var miners = new[] { miner };
+
+            var blockPolicySource = new BlockPolicySource(Logger.None);
+            IBlockPolicy<PolymorphicAction<ActionBase>> policy = blockPolicySource.GetPolicy(4096);
+            Block<PolymorphicAction<ActionBase>> genesis = MakeGenesisBlock(
+                adminAddress,
+                ImmutableHashSet<Address>.Empty,
+                new AuthorizedMinersState(miners, 2, 6)
+            );
+            using var store = new DefaultStore(null);
+            var blockChain = new BlockChain<PolymorphicAction<ActionBase>>(
+                policy,
+                store,
+                store,
+                genesis,
+                renderers: new[] { blockPolicySource.BlockRenderer }
+            );
+
+            if (policy is BlockPolicy bp)
+            {
+                bp.AuthorizedMinersState = new AuthorizedMinersState(
+                    (Dictionary)blockChain.GetState(AuthorizedMinersState.Address)
+                    );
+            }
+
+            var dateTimeOffset = DateTimeOffset.MinValue;
+
+            // Index 1
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 2, target index
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 3
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 4, target index
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 5
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 6, target index
+            Assert.Equal(4096, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 7
+            Assert.Equal(4098, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 8
+            Assert.Equal(4100, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 9
+            Assert.Equal(4102, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 10
+            Assert.Equal(4104, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(1);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 11
+            Assert.Equal(4106, policy.GetNextBlockDifficulty(blockChain));
+
+            dateTimeOffset += TimeSpan.FromSeconds(20);
+            await blockChain.MineBlock(miner, dateTimeOffset);
+
+            // Index 12
+            Assert.Equal(4104, policy.GetNextBlockDifficulty(blockChain));
         }
 
         private Block<PolymorphicAction<ActionBase>> MakeGenesisBlock(
             Address adminAddress,
-            IImmutableSet<Address> activatedAddresses
+            IImmutableSet<Address> activatedAddresses,
+            AuthorizedMinersState authorizedMinersState = null,
+            DateTimeOffset? timestamp = null
         )
         {
+            var nonce = new byte[] { 0x00, 0x01, 0x02, 0x03 };
+            var privateKey = new PrivateKey();
+            (ActivationKey activationKey, PendingActivationState pendingActivation) =
+                ActivationKey.Create(privateKey, nonce);
+
             return BlockChain<PolymorphicAction<ActionBase>>.MakeGenesisBlock(
                     new PolymorphicAction<ActionBase>[]
                     {
-                        new InitializeStates()
-                        {
-                            RankingState = new RankingState(),
-                            ShopState = new ShopState(),
-                            TableSheets = TableSheetsImporter.ImportSheets(),
-                            GameConfigState = new GameConfigState(),
-                            RedeemCodeState = new RedeemCodeState(Dictionary.Empty
+                        new InitializeStates(
+                            rankingState: new RankingState(),
+                            shopState: new ShopState(),
+                            tableSheets: TableSheetsImporter.ImportSheets(),
+                            gameConfigState: new GameConfigState(),
+                            redeemCodeState: new RedeemCodeState(Dictionary.Empty
                                 .Add("address", RedeemCodeState.Address.Serialize())
                                 .Add("map", Dictionary.Empty)
                             ),
-                            AdminAddressState = new AdminState(adminAddress, 1500000),
-                            ActivatedAccountsState = new ActivatedAccountsState(activatedAddresses),
-                            GoldCurrencyState = new GoldCurrencyState(
+                            adminAddressState: new AdminState(adminAddress, 1500000),
+                            activatedAccountsState: new ActivatedAccountsState(activatedAddresses),
+                            goldCurrencyState: new GoldCurrencyState(
                                 new Currency("NCG", 2, minter: null)
                             ),
-                            GoldDistributions = new GoldDistribution[0],
-                        },
-                    }
+                            goldDistributions: new GoldDistribution[0],
+                            pendingActivationStates: new[] { pendingActivation },
+                            authorizedMinersState: authorizedMinersState
+                        ),
+                    },
+                    timestamp: timestamp ?? DateTimeOffset.MinValue
                 );
         }
     }

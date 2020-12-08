@@ -189,8 +189,8 @@ namespace Nekoyume.Model
                 if (!info.Target.IsDead)
                     continue;
 
-                var target = Targets.First(i => i.Id == info.Target.Id);
-                target.Die();
+                var target = Targets.FirstOrDefault(i => i.Id == info.Target.Id);
+                target?.Die();
             }
         }
 
@@ -394,7 +394,7 @@ namespace Nekoyume.Model
             if (!_skillsCooldown.Any())
                 return;
 
-            foreach (var key in _skillsCooldown.Keys.ToList())
+            foreach (var key in _skillsCooldown.Keys.OrderBy(i => i))
             {
                 var value = _skillsCooldown[key];
                 if (value <= 1)

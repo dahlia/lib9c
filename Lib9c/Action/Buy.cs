@@ -21,6 +21,8 @@ namespace Nekoyume.Action
     [ActionType("buy")]
     public class Buy : GameAction
     {
+        public const int TaxRate = 8;
+
         public Address buyerAvatarAddress;
         public Address sellerAgentAddress;
         public Address sellerAvatarAddress;
@@ -202,7 +204,7 @@ namespace Nekoyume.Action
                 );
             }
 
-            var tax = shopItem.Price.DivRem(100, out _) * 8;
+            var tax = shopItem.Price.DivRem(100, out _) * TaxRate;
             var taxedPrice = shopItem.Price - tax;
 
             // 세금을 송금한다.
@@ -260,10 +262,9 @@ namespace Nekoyume.Action
             buyerAvatarState.questList.UpdateTradeQuest(TradeType.Buy, shopItem.Price);
             sellerAvatarState.questList.UpdateTradeQuest(TradeType.Sell, shopItem.Price);
 
-            var timestamp = DateTimeOffset.UtcNow;
-            buyerAvatarState.updatedAt = timestamp;
+            buyerAvatarState.updatedAt = ctx.BlockIndex;
             buyerAvatarState.blockIndex = ctx.BlockIndex;
-            sellerAvatarState.updatedAt = timestamp;
+            sellerAvatarState.updatedAt = ctx.BlockIndex;
             sellerAvatarState.blockIndex = ctx.BlockIndex;
 
             var materialSheet = states.GetSheet<MaterialItemSheet>();

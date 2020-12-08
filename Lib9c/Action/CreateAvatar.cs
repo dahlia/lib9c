@@ -20,9 +20,6 @@ namespace Nekoyume.Action
     [ActionType("create_avatar")]
     public class CreateAvatar : GameAction
     {
-        // 계정당 기본 소지 골드
-        public static readonly BigInteger InitialGoldBalance = 1500;
-
         public Address avatarAddress;
         public int index;
         public int hair;
@@ -74,6 +71,7 @@ namespace Nekoyume.Action
 
                 return states
                     .SetState(avatarAddress, MarkChanged)
+                    .SetState(Addresses.Ranking, MarkChanged)
                     .MarkBalanceChanged(GoldCurrencyMock, GoldCurrencyState.Address, context.Signer);
             }
 
@@ -106,16 +104,6 @@ namespace Nekoyume.Action
             Log.Debug("CreateAvatar Get AgentAvatarStates: {Elapsed}", sw.Elapsed);
             sw.Restart();
 
-            if (existingAgentState is null)
-            {
-                // 첫 아바타 생성이면 계정당 기본 소지금 부여.
-                states = states.TransferAsset(
-                    GoldCurrencyState.Address,
-                    ctx.Signer,
-                    states.GetGoldCurrency() * InitialGoldBalance
-                );
-            }
-
             Log.Debug("Execute CreateAvatar; player: {AvatarAddress}", avatarAddress);
 
             agentState.avatarAddresses.Add(index, avatarAddress);
@@ -123,7 +111,11 @@ namespace Nekoyume.Action
             // Avoid NullReferenceException in test
             var materialItemSheet = ctx.PreviousStates.GetSheet<MaterialItemSheet>();
 
-            avatarState = CreateAvatarState(name, avatarAddress, ctx, materialItemSheet);
+            var rankingState = ctx.PreviousStates.GetRankingState();
+
+            var rankingMapAddress = rankingState.UpdateRankingMap(avatarAddress);
+
+            avatarState = CreateAvatarState(name, avatarAddress, ctx, materialItemSheet, rankingMapAddress);
 
             if (hair < 0) hair = 0;
             if (lens < 0) lens = 0;
@@ -147,15 +139,15 @@ namespace Nekoyume.Action
             Log.Debug("CreateAvatar Total Executed Time: {Elapsed}", ended - started);
             return states
                 .SetState(ctx.Signer, agentState.Serialize())
+                .SetState(Addresses.Ranking, rankingState.Serialize())
                 .SetState(avatarAddress, avatarState.Serialize());
         }
 
-        private static AvatarState CreateAvatarState(
-            string name,
+        private static AvatarState CreateAvatarState(string name,
             Address avatarAddress,
             IActionContext ctx,
-            MaterialItemSheet materialItemSheet
-        )
+            MaterialItemSheet materialItemSheet,
+            Address rankingMapAddress)
         {
             var state = ctx.PreviousStates;
             var gameConfigState = state.GetGameConfigState();
@@ -165,6 +157,7 @@ namespace Nekoyume.Action
                 ctx.BlockIndex,
                 state.GetAvatarSheets(),
                 gameConfigState,
+                rankingMapAddress,
                 name
             );
 
@@ -186,21 +179,21 @@ namespace Nekoyume.Action
             EquipmentItemSheet equipmentItemSheet
         )
         {
-            foreach (var row in costumeItemSheet)
+            foreach (var row in costumeItemSheet.OrderedList)
             {
                 avatarState.inventory.AddItem(ItemFactory.CreateCostume(row));
             }
 
-            foreach (var row in materialItemSheet)
+            foreach (var row in materialItemSheet.OrderedList)
             {
                 avatarState.inventory.AddItem(ItemFactory.CreateMaterial(row), 10);
             }
 
-            foreach (var pair in equipmentItemSheet.Where(pair =>
-                pair.Value.Id > GameConfig.DefaultAvatarWeaponId))
+            foreach (var row in equipmentItemSheet.OrderedList.Where(row =>
+                row.Id > GameConfig.DefaultAvatarWeaponId))
             {
                 var itemId = random.GenerateRandomGuid();
-                avatarState.inventory.AddItem(ItemFactory.CreateItemUsable(pair.Value, itemId, default));
+                avatarState.inventory.AddItem(ItemFactory.CreateItemUsable(row, itemId, default));
             }
         }
     }

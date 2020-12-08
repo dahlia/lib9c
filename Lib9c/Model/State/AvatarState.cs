@@ -5,11 +5,9 @@ using System.Globalization;
 using System.Linq;
 using Bencodex.Types;
 using Libplanet;
-using Libplanet.Action;
 using Libplanet.Crypto;
 using Nekoyume.Action;
 using Nekoyume.Battle;
-using Nekoyume.Model.BattleStatus;
 using Nekoyume.Model.Item;
 using Nekoyume.Model.Mail;
 using Nekoyume.Model.Quest;
@@ -29,7 +27,8 @@ namespace Nekoyume.Model.State
         public long exp;
         public Inventory inventory;
         public WorldInformation worldInformation;
-        public DateTimeOffset updatedAt;
+        // FIXME: it seems duplicated with blockIndex.
+        public long updatedAt;
         public Address agentAddress;
         public QuestList questList;
         public MailBox mailBox;
@@ -50,6 +49,8 @@ namespace Nekoyume.Model.State
         public string NameWithHash { get; private set; }
         public int Nonce { get; private set; }
 
+        public readonly Address RankingMapAddress;
+
         public static Address CreateAvatarAddress()
         {
             var key = new PrivateKey();
@@ -61,6 +62,7 @@ namespace Nekoyume.Model.State
             long blockIndex,
             AvatarSheets avatarSheets,
             GameConfigState gameConfigState,
+            Address rankingMapAddress,
             string name = null) : base(address)
         {
             if (address == null)
@@ -72,7 +74,7 @@ namespace Nekoyume.Model.State
             exp = 0;
             inventory = new Inventory();
             worldInformation = new WorldInformation(blockIndex, avatarSheets.WorldSheet, GameConfig.IsEditor);
-            updatedAt = DateTimeOffset.UtcNow;
+            updatedAt = blockIndex;
             this.agentAddress = agentAddress;
             questList = new QuestList(
                 avatarSheets.QuestSheet,
@@ -106,6 +108,12 @@ namespace Nekoyume.Model.State
                 );
                 combinationSlotAddresses.Add(slotAddress);
             }
+
+            combinationSlotAddresses = combinationSlotAddresses
+                .OrderBy(element => element)
+                .ToList();
+
+            RankingMapAddress = rankingMapAddress;
             UpdateGeneralQuest(new[] { createEvent, levelEvent });
             UpdateCompletedQuest();
 
@@ -139,6 +147,7 @@ namespace Nekoyume.Model.State
             ear = avatarState.ear;
             tail = avatarState.tail;
             combinationSlotAddresses = avatarState.combinationSlotAddresses;
+            RankingMapAddress = avatarState.RankingMapAddress;
 
             PostConstructor();
         }
@@ -152,7 +161,7 @@ namespace Nekoyume.Model.State
             exp = (long)((Integer)serialized["exp"]).Value;
             inventory = new Inventory((List)serialized["inventory"]);
             worldInformation = new WorldInformation((Dictionary)serialized["worldInformation"]);
-            updatedAt = serialized["updatedAt"].ToDateTimeOffset();
+            updatedAt = serialized["updatedAt"].ToLong();
             agentAddress = new Address(((Binary)serialized["agentAddress"]).Value);
             questList = new QuestList((Dictionary) serialized["questList"]);
             mailBox = new MailBox((List)serialized["mailBox"]);
@@ -169,6 +178,7 @@ namespace Nekoyume.Model.State
             ear = (int)((Integer)serialized["ear"]).Value;
             tail = (int)((Integer)serialized["tail"]).Value;
             combinationSlotAddresses = serialized["combinationSlotAddresses"].ToList(StateExtensions.ToAddress);
+            RankingMapAddress = serialized["ranking_map_address"].ToAddress();
             if (serialized.TryGetValue((Text) "nonce", out var nonceValue))
             {
                 Nonce = nonceValue.ToInteger();
@@ -304,9 +314,9 @@ namespace Nekoyume.Model.State
         public void UpdateFromQuestReward(Quest.Quest quest, MaterialItemSheet materialItemSheet)
         {
             var items = new List<Material>();
-            foreach (var pair in quest.Reward.ItemMap)
+            foreach (var pair in quest.Reward.ItemMap.OrderBy(kv => kv.Key))
             {
-                var row = materialItemSheet.Values.First(itemRow => itemRow.Id == pair.Key);
+                var row = materialItemSheet.OrderedList.First(itemRow => itemRow.Id == pair.Key);
                 var item = ItemFactory.CreateMaterial(row);
                 var map = inventory.AddItem(item, pair.Value);
                 itemMap.Add(map);
@@ -345,10 +355,9 @@ namespace Nekoyume.Model.State
             return armor?.Id ?? GameConfig.DefaultAvatarArmorId;
         }
 
-        public bool ValidateEquipments(List<Guid> equipmentIds, long blockIndex)
+        public void ValidateEquipments(List<Guid> equipmentIds, long blockIndex)
         {
             var ringCount = 0;
-            var failed = false;
             foreach (var itemId in equipmentIds)
             {
                 if (!inventory.TryGetNonFungibleItem(itemId, out ItemUsable outNonFungibleItem))
@@ -359,40 +368,41 @@ namespace Nekoyume.Model.State
                 var equipment = (Equipment) outNonFungibleItem;
                 if (equipment.RequiredBlockIndex > blockIndex)
                 {
-                    failed = true;
-                    break;
+                    throw new RequiredBlockIndexException($"{equipment.ItemSubType} / unlock on {equipment.RequiredBlockIndex}");
                 }
 
+                var requiredLevel = 0;
                 switch (equipment.ItemSubType)
                 {
                     case ItemSubType.Weapon:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotWeapon;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotWeapon;
                         break;
                     case ItemSubType.Armor:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotArmor;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotArmor;
                         break;
                     case ItemSubType.Belt:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotBelt;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotBelt;
                         break;
                     case ItemSubType.Necklace:
-                        failed = level < GameConfig.RequireCharacterLevel.CharacterEquipmentSlotNecklace;
+                        requiredLevel = GameConfig.RequireCharacterLevel.CharacterEquipmentSlotNecklace;
                         break;
                     case ItemSubType.Ring:
                         ringCount++;
-                        var requireLevel = ringCount == 1
+                        requiredLevel = ringCount == 1
                             ? GameConfig.RequireCharacterLevel.CharacterEquipmentSlotRing1
                             : ringCount == 2
                                 ? GameConfig.RequireCharacterLevel.CharacterEquipmentSlotRing2
                                 : int.MaxValue;
-                        failed = level < requireLevel;
                         break;
                     default:
-                        failed = true;
-                        break;
+                        throw new ArgumentOutOfRangeException($"{equipment.ItemSubType} / invalid equipment type");
+                }
+
+                if (level < requiredLevel)
+                {
+                    throw new EquipmentSlotUnlockException($"{equipment.ItemSubType} / not enough level. required: {requiredLevel}");
                 }
             }
-
-            return !failed;
         }
 
         public void EquipCostumes(List<int> costumeIds)
@@ -477,8 +487,12 @@ namespace Nekoyume.Model.State
                 [(Text)"lens"] = (Integer)lens,
                 [(Text)"ear"] = (Integer)ear,
                 [(Text)"tail"] = (Integer)tail,
-                [(Text)"combinationSlotAddresses"] = combinationSlotAddresses.Select(i => i.Serialize()).Serialize(),
+                [(Text)"combinationSlotAddresses"] = combinationSlotAddresses
+                    .OrderBy(i => i)
+                    .Select(i => i.Serialize())
+                    .Serialize(),
                 [(Text) "nonce"] = Nonce.Serialize(),
+                [(Text)"ranking_map_address"] = RankingMapAddress.Serialize(),
             }.Union((Dictionary)base.Serialize()));
     }
 }

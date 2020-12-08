@@ -240,24 +240,16 @@ namespace Nekoyume.Model
             return true;
         }
 
-        public bool TryUpdateWorld(WorldSheet.Row worldRow, out World world)
+        public void UpdateWorld(WorldSheet.Row worldRow)
         {
-            if (worldRow is null ||
-                !_worlds.ContainsKey(worldRow.Id))
-            {
-                world = default;
-                return false;
-            }
-
             var originWorld = _worlds[worldRow.Id];
-            world = new World(
+            var world = new World(
                 worldRow,
                 originWorld.UnlockedBlockIndex,
                 originWorld.StageClearedBlockIndex,
                 originWorld.StageClearedId
             );
             _worlds[worldRow.Id] = world;
-            return true;
         }
 
         /// <summary>
@@ -367,6 +359,18 @@ namespace Nekoyume.Model
             WorldSheet worldSheet,
             WorldUnlockSheet worldUnlockSheet)
         {
+            if (!_worlds.ContainsKey(worldId))
+            {
+                return;
+            }
+
+            var world = _worlds[worldId];
+            if (stageId < world.StageBegin ||
+                stageId > world.StageEnd)
+            {
+                return;
+            }
+
             // NOTE: Always consider world unlock.
             // Because even a stage that has already been cleared can be a trigger for world unlock due to the table patch.
             if (worldUnlockSheet.TryGetUnlockedInformation(worldId, stageId, out var worldIdsToUnlock))
@@ -377,13 +381,27 @@ namespace Nekoyume.Model
                 }
             }
 
-            var world = _worlds[worldId];
             if (stageId <= world.StageClearedId)
             {
                 return;
             }
 
             _worlds[worldId] = new World(world, clearedAt, stageId);
+        }
+
+        public void AddAndUnlockNewWorld(WorldSheet.Row worldRow, long unlockedAt, WorldSheet worldSheet)
+        {
+            var worldId = worldRow.Id;
+            if (IsStageCleared(worldRow.StageBegin - 1))
+            {
+                var world = new World(worldRow);
+                _worlds.Add(worldId, world);
+                UnlockWorld(worldId, unlockedAt, worldSheet);
+            }
+            else
+            {
+                throw new FailedAddWorldException($"Failed to add {worldId} world to WorldInformation.");
+            }
         }
 
         /// <summary>
@@ -424,6 +442,18 @@ namespace Nekoyume.Model
 
         protected FailedToUnlockWorldException(SerializationInfo info, StreamingContext context) :
             base(info, context)
+        {
+        }
+    }
+
+    [Serializable]
+    public class FailedAddWorldException : Exception
+    {
+        public FailedAddWorldException(string message) : base(message)
+        {
+        }
+
+        protected FailedAddWorldException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
     }

@@ -100,6 +100,11 @@ namespace Nekoyume.Model.State
             int firstRank = 1,
             int? count = null)
         {
+            if (OrderedArenaInfos.Count == 0)
+            {
+                return new List<(int rank, ArenaInfo arenaInfo)>();
+            }
+
             if (!(0 < firstRank && firstRank <= OrderedArenaInfos.Count))
             {
                 throw new ArgumentOutOfRangeException(
@@ -382,7 +387,7 @@ namespace Nekoyume.Model.State
             ArmorId = prevInfo.ArmorId;
             Level = prevInfo.Level;
             AvatarName = prevInfo.AvatarName;
-            CombatPoint = 100;
+            CombatPoint = prevInfo.CombatPoint;
             Score = 1000;
             DailyChallengeCount = 5;
             Active = false;

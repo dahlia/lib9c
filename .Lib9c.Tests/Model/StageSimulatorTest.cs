@@ -26,7 +26,8 @@ namespace Lib9c.Tests.Model
                 default,
                 0,
                 _tableSheets.GetAvatarSheets(),
-                new GameConfigState()
+                new GameConfigState(),
+                default
             );
         }
 
@@ -45,6 +46,7 @@ namespace Lib9c.Tests.Model
             var filtered =
                 simulator.Log.Where(e => e.GetType() != typeof(GetReward) || e.GetType() != typeof(DropBox));
             Assert.Equal(typeof(WaveTurnEnd), filtered.Last().GetType());
+            Assert.Equal(1, simulator.Log.OfType<WaveTurnEnd>().First().TurnNumber);
         }
     }
 }
